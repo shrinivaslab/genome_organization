@@ -1,0 +1,10 @@
+build
+polychrom.egg-info
+*linux-gnu.so
+.ipynb*
+*.pyc
+polychrom/_polymer_math.cpp
+*.h5
+*.dat
+.idea
+dist
