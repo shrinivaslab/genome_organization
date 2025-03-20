@@ -12,8 +12,11 @@ dependencies = [
     "requests"
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}  # Tell setuptools to look in /src for packages
+
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["*"]  # Automatically discover all top-level packages
-exclude = ["tests", "docs", "examples"]  # Ignore non-code directories
+where = ["src"]
+include = ["*"]  # Auto-discover packages
+exclude = ["tests", "docs"]
 
