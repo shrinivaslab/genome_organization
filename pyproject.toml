@@ -1,8 +1,19 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "genome_organization"
 version = "0.1.0"
-dependencies = []
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "requests"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]  # Automatically discover all top-level packages
+exclude = ["tests", "docs", "examples"]  # Ignore non-code directories
+
