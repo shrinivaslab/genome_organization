@@ -101,7 +101,7 @@ except Exception:
 
 import simtk.unit
 
-from polychrom import forces
+from . import forces
 
 logging.basicConfig(level=logging.INFO)
 
