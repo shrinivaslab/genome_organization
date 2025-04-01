@@ -1122,40 +1122,40 @@ def add_C_monomer_pinning(sim_object, C_monomers, density=0.33, k=1.0):
     k : float
         Force constant in units of kT
     """
+    name = 'C_monomer_pinning'
     # Calculate local sphere radius based on density
     local_volume = len(C_monomers)/density
     local_radius = (local_volume)**(1/3.)
-    
+
+
     # Generate random center points on the nuclear lamina for each group of C monomers
     theta = np.random.random() * 2 * np.pi
     phi = np.arccos(2 * np.random.random() - 1)
     
     # Convert to Cartesian coordinates on the lamina
-    R = sim_object.sphericalConfinementRadius  # radius of main confining sphere
+    R = sim_object.length_scale  # radius of main confining sphere
     center_x = R * np.sin(phi) * np.cos(theta)
     center_y = R * np.sin(phi) * np.sin(theta)
     center_z = R * np.cos(phi)
     
     # Create force using same form as spherical confinement
-    pin_force = openmm.CustomExternalForce(
+    force = openmm.CustomExternalForce(
         "step(r-aa) * kb * (sqrt((r-aa)*(r-aa) + t*t) - t);"
         "r = sqrt((x-x0)^2 + (y-y0)^2 + (z-z0)^2 + tt^2)"
     )
-    
+    force.name = name
     # Add global parameters
-    pin_force.addGlobalParameter("kb", k * sim_object.kT / sim_object.conlen)
-    pin_force.addGlobalParameter("aa", (local_radius - 1.0/k) * sim_object.conlen)
-    pin_force.addGlobalParameter("t", (1.0/k) * sim_object.conlen / 10.0)
-    pin_force.addGlobalParameter("tt", 0.01 * sim_object.conlen)
-    pin_force.addGlobalParameter("x0", center_x * sim_object.conlen)
-    pin_force.addGlobalParameter("y0", center_y * sim_object.conlen)
-    pin_force.addGlobalParameter("z0", center_z * sim_object.conlen)
+    force.addGlobalParameter("kb", k * sim_object.kT / sim_object.conlen)
+    force.addGlobalParameter("aa", (local_radius - 1.0/k) * sim_object.conlen)
+    force.addGlobalParameter("t", (1.0/k) * sim_object.conlen / 10.0)
+    force.addGlobalParameter("tt", 0.01 * sim_object.conlen)
+    force.addGlobalParameter("x0", center_x * sim_object.conlen)
+    force.addGlobalParameter("y0", center_y * sim_object.conlen)
+    force.addGlobalParameter("z0", center_z * sim_object.conlen)
     
     # Add only C monomers
     for particle in C_monomers:
-        pin_force.addParticle(particle, [])
-    
-    sim_object.force_dict[f"C_monomer_pinning_{len(sim_object.force_dict)}"] = pin_force
+        force.addParticle(particle, [])
 
     #example usage
     # Identify C monomers (assuming they're type 2)
@@ -1165,24 +1165,25 @@ def add_C_monomer_pinning(sim_object, C_monomers, density=0.33, k=1.0):
     # # You might need to group consecutive C monomers if they should be pinned together
     # center_point = add_C_monomer_pinning(sim, C_monomers, density=0.33)
     
-    return (center_x, center_y, center_z)  # Return center point for reference
+    return force
 
 def add_B_monomer_lamina_attraction(sim_object, B_monomers, BLam=1.0):
     """Implements the exact lamina attraction for B monomers as described in methods"""
-    
-    lamina_force = openmm.CustomExternalForce(
+    name = 'B_monomer_lamina_attraction'
+    force = openmm.CustomExternalForce(
         "BLam * (L - R + 1) * (R - L + 1) * step(1 - (R - L)) * step(R - L + 1);"
         "L = sqrt(r2 + tt2);"
         "r2 = x*x + y*y + z*z"
     )
     
     # Add parameters
-    lamina_force.addGlobalParameter("BLam", BLam * sim_object.kT)
-    lamina_force.addGlobalParameter("R", sim_object.sphericalConfinementRadius)
-    lamina_force.addGlobalParameter("tt2", 0.01 * 0.01)  # .01^2 as specified in methods
-    
+    force.addGlobalParameter("BLam", BLam * sim_object.kT)
+    force.addGlobalParameter("R", sim_object.length_scale)
+    force.addGlobalParameter("tt2", 0.01 * 0.01)  # .01^2 as specified in methods
+    force.name = name
+
     # Add only B monomers
     for particle in B_monomers:
-        lamina_force.addParticle(particle, [])
+        force.addParticle(particle, [])
     
-    sim_object.force_dict["B_monomer_lamina_attraction"] = lamina_force
+    return force

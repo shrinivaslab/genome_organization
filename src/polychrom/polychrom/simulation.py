@@ -225,6 +225,9 @@ class Simulation(object):
         reporters: list, optional
             List of reporters to use in the simulation.
 
+        cpu_threads: int
+            number of cpu threads to use in the simulation.
+
         """
         default_args = {
             "platform": "CUDA",
@@ -239,6 +242,7 @@ class Simulation(object):
             "precision": "single",
             "save_decimals": 2,
             "verbose": False,
+            "cpu_threads": 4,
         }
         valid_names = list(default_args.keys()) + [
             "N",
@@ -274,6 +278,7 @@ class Simulation(object):
             platform_object = openmm.Platform.getPlatformByName("CUDA")
         elif platform.lower() == "cpu":
             platform_object = openmm.Platform.getPlatformByName("CPU")
+            platform_object.setPropertyDefaultValue("Threads", str(kwargs['cpu_threads']))
         else:
             raise RuntimeError("Undefined platform: {0}".format(platform))
         self.platform = platform_object
