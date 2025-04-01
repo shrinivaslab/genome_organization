@@ -277,8 +277,13 @@ class Simulation(object):
         elif platform.lower() == "cuda":
             platform_object = openmm.Platform.getPlatformByName("CUDA")
         elif platform.lower() == "cpu":
+            # platform_object = openmm.Platform.getPlatformByName("CPU")
+            # platform_object.setPropertyDefaultValue("Threads", str(kwargs['cpu_threads']))
+            print(f"Setting up CPU platform with {kwargs.get('cpu_threads', 'no threads specified')} threads")
             platform_object = openmm.Platform.getPlatformByName("CPU")
+            print(f"Before setting threads - Platform properties: {platform_object.getPropertyNames()}")
             platform_object.setPropertyDefaultValue("Threads", str(kwargs['cpu_threads']))
+            print(f"After setting threads - Platform properties: {platform_object.getPropertyNames()}")
         else:
             raise RuntimeError("Undefined platform: {0}".format(platform))
         self.platform = platform_object
