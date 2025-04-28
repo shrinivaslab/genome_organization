@@ -1187,3 +1187,101 @@ def add_B_monomer_lamina_attraction(sim_object, B_monomers, BLam=1.0):
         force.addParticle(particle, [])
     
     return force
+
+def custom_sticky_force(
+    sim_object,
+    interactionMatrix,
+    monomerTypes,
+    rCutoff=1.8,
+    name="custom_sticky_force"
+):
+    """
+    Implements the custom sticky potential as described in the provided image.
+
+    Repulsive part (for r < 1):
+        U_rep(r) = 5 * (1 + rRep^12 * (rRep^2 - 1) * c1)
+        where rRep = r * c2
+
+    Attractive part (for 1 <= r < 1.8):
+        U_att(r) = -epsilon * (1 + rAtt^12 * (rAtt^2 - 1) * c1)
+        where rAtt = ((r-1.4)/0.4) * c2
+        epsilon is set by interactionMatrix[type1, type2]
+
+    Parameters
+    ----------
+    sim_object : polychrom.simulation.Simulation
+    interactionMatrix : np.ndarray
+        Matrix of stickiness values (epsilon) for each type pair.
+    monomerTypes : np.ndarray
+        Array of type indices for each monomer.
+    rCutoff : float
+        Cutoff for the attractive part (default 1.8).
+    name : str
+        Name for the force.
+
+    Returns
+    -------
+    force : openmm.CustomNonbondedForce
+    """
+
+    Ntypes = max(monomerTypes) + 1
+    if any(np.less(interactionMatrix.shape, [Ntypes, Ntypes])):
+        raise ValueError("Need interactions for {0:d} types!".format(Ntypes))
+    if not np.allclose(interactionMatrix.T, interactionMatrix):
+        raise ValueError("Interaction matrix should be symmetric!")
+
+    indexpairs = []
+    for i in range(0, Ntypes):
+        for j in range(0, Ntypes):
+            if interactionMatrix[i, j] != 0:
+                indexpairs.append((i, j))
+
+    # Constants for the polynomial
+    c1 = (7.0 / 6.0) ** 6 * 7.0
+    c2 = np.sqrt(6.0 / 7.0)
+
+    # Build the energy string
+    energy = (
+        "step(rCutoff - r) * eRep + step(r - rCutoff) * eAttr;"
+        ""
+        "eRep = 5 * (1 + rRep12 * (rRep2 - 1) * c1);"
+        "rRep12 = rRep4 * rRep4 * rRep4;"
+        "rRep4 = rRep2 * rRep2;"
+        "rRep2 = rRep * rRep;"
+        "rRep = r * c2;"
+        ""
+        "eAttr ="
+    )
+    if len(indexpairs) > 0:
+        energy += (" -1 * (delta(type1-{0:d})*delta(type2-{1:d})*INT_{0:d}_{1:d}").format(
+            indexpairs[0][0], indexpairs[0][1]
+        )
+        for i, j in indexpairs[1:]:
+            energy += "+delta(type1-{0:d})*delta(type2-{1:d})*INT_{0:d}_{1:d}".format(i, j)
+        energy += ") * (1 + rAtt12 * (rAtt2 - 1) * c1)"
+    energy += (
+        ";"
+        "rAtt12 = rAtt4 * rAtt4 * rAtt4;"
+        "rAtt4 = rAtt2 * rAtt2;"
+        "rAtt2 = rAtt * rAtt;"
+        "rAtt = ((r-1.4)/0.4) * c2;"
+    )
+
+    force = openmm.CustomNonbondedForce(energy)
+    force.name = name
+
+    force.addGlobalParameter("rCutoff", rCutoff * sim_object.conlen)
+    force.addGlobalParameter("c1", c1)
+    force.addGlobalParameter("c2", c2)
+
+    for i, j in indexpairs:
+        force.addGlobalParameter("INT_{0:d}_{1:d}".format(i, j), interactionMatrix[i, j])
+
+    force.addPerParticleParameter("type")
+
+    for i in range(sim_object.N):
+        force.addParticle([float(monomerTypes[i])])
+
+    force.setCutoffDistance(rCutoff * sim_object.conlen)
+
+    return force
