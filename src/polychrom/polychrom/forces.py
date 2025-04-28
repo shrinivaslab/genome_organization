@@ -1270,12 +1270,12 @@ def custom_sticky_force(
     force = openmm.CustomNonbondedForce(energy)
     force.name = name
 
-    force.addGlobalParameter("rCutoff", rCutoff * sim_object.conlen)
-    force.addGlobalParameter("c1", c1)
-    force.addGlobalParameter("c2", c2)
+    force.addGlobalParameter("rCutoff", float(rCutoff * sim_object.conlen))
+    force.addGlobalParameter("c1", float(c1))
+    force.addGlobalParameter("c2", float(c2))
 
     for i, j in indexpairs:
-        force.addGlobalParameter("INT_{0:d}_{1:d}".format(i, j), interactionMatrix[i, j])
+        force.addGlobalParameter("INT_{0:d}_{1:d}".format(i, j), float(interactionMatrix[i, j]))
 
     force.addPerParticleParameter("type")
 
