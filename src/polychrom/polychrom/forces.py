@@ -1242,7 +1242,7 @@ def custom_sticky_force(
 
     # Build the energy string
     energy = (
-        "step(1.0 - r) * eRep + step(r - 1.0) * step(rCutoff - r) * eAttr;"
+        "step(1.0 - r) * lambda_sticky * eRep + step(r - 1.0) * step(rCutoff - r) * lambda_sticky * eAttr;"
         ""
         "eRep = 5 * (1 + rRep12 * (rRep2 - 1) * c1);"
         "rRep12 = rRep4 * rRep4 * rRep4;"
@@ -1273,7 +1273,7 @@ def custom_sticky_force(
     force.addGlobalParameter("rCutoff", rCutoff * sim_object.conlen)
     force.addGlobalParameter("c1", c1)
     force.addGlobalParameter("c2", c2)
-
+    force.addGlobalParameter("lambda_sticky", 1.0)
     for i, j in indexpairs:
         force.addGlobalParameter("INT_{0:d}_{1:d}".format(i, j), interactionMatrix[i, j])
 
