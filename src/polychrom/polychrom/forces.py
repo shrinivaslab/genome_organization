@@ -1242,7 +1242,7 @@ def custom_sticky_force(
 
     # Build the energy string
     energy = (
-        "step(rCutoff - r) * eRep + step(r - rCutoff) * eAttr;"
+        "step(1.0 - r) * eRep + step(r - 1.0) * step(rCutoff - r) * eAttr;"
         ""
         "eRep = 5 * (1 + rRep12 * (rRep2 - 1) * c1);"
         "rRep12 = rRep4 * rRep4 * rRep4;"

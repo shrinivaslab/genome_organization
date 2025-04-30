@@ -501,6 +501,7 @@ class Simulation(object):
         if self.forces_applied:
             raise RuntimeError("Cannot add force after the context has been created")
 
+
     def _apply_forces(self):
         """
         Adds all particles and forces to the system.
