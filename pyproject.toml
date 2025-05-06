@@ -13,10 +13,10 @@ dependencies = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}  # Tell setuptools to look in /src for packages
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["*"]  # Auto-discover packages
-exclude = ["tests", "docs"]
+include = ["*"]
+exclude = ["tests", "docs", "examples"]
 
