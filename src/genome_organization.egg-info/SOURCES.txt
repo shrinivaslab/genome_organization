@@ -1,6 +1,9 @@
 README.md
 pyproject.toml
 setup.py
+src/chunkchromatin/chromosome.py
+src/chunkchromatin/hdf5_format.py
+src/chunkchromatin/simulation.py
 src/genome_organization.egg-info/PKG-INFO
 src/genome_organization.egg-info/SOURCES.txt
 src/genome_organization.egg-info/dependency_links.txt
@@ -56,3 +59,8 @@ src/polykit/polykit/generators/initial_conformations.py
 src/polykit/polykit/renderers/__init__.py
 src/polykit/polykit/renderers/backends.py
 src/polykit/polykit/renderers/viewers.py
+src/utilis/__init__.py
+src/utilis/contact_map_consensus.py
+src/utilis/domain_visualization.py
+src/utilis/polychrom_hp_functions.py
+src/utilis/simulation_accessory.py
