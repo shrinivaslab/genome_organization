@@ -1,7 +1,7 @@
 import logging
 import time
+from openmm import unit
 import openmm as mm
-import simtk
 import numpy as np
 
 logging.basicConfig(level=logging.INFO)
@@ -32,9 +32,9 @@ class Simulation(object):
 
         #integrator parameters
         self.integrator_type = kwargs.get("integrator_type", "Langevin")
-        self.temperature = kwargs.get("temperature", 300.0) * simtk.unit.kelvin
-        self.gamma = kwargs.get("gamma", 1.0) / simtk.unit.picosecond
-        self.timestep = kwargs.get("timestep", 0.002) * simtk.unit.picosecond
+        self.temperature = kwargs.get("temperature", 300.0) * unit.kelvin
+        self.gamma = kwargs.get("gamma", 0.05) / unit.picosecond
+        self.timestep = kwargs.get("timestep", 70) * unit.femtoseconds
 
         #platform parameters
         self.platform = kwargs.get("platform", "CPU")
@@ -44,9 +44,9 @@ class Simulation(object):
 
         #global parameters
         self.N = kwargs.get("N")
-        self.kB = simtk.unit.BOLTZMANN_CONSTANT_kB * simtk.unit.AVOGADRO_CONSTANT_NA
+        self.kB = unit.BOLTZMANN_CONSTANT_kB * unit.AVOGADRO_CONSTANT_NA
         self.kT = self.temperature * self.kB
-        self.conlen = kwargs.get("conlen", 1.0)
+        self.conlen = kwargs.get("conlen", 1.0) * unit.nanometer
 
         #Internal state
         self.positions = None
@@ -98,29 +98,32 @@ class Simulation(object):
         # Add small random offset
         pos_final = pos_centered + np.random.uniform(-random_offset, random_offset, pos_centered.shape)
 
-        self.positions = pos_final * simtk.unit.nanometers
+        self.positions = pos_final * unit.nanometers
 
     def set_velocities(self):
         """
-        Set initial velocities according to Maxwell-Boltzmann distribution at the specified temperature.
+        Set initial velocities according to the Maxwell-Boltzmann distribution
+        at the specified temperature. Assumes all particles have equal mass.
         """
         if not hasattr(self, 'context'):
             raise RuntimeError("Context must be created before setting velocities")
+
+        # Get the mass of a particle (assumed identical for all)
+        mass = self.system.getParticleMass(0)  # in OpenMM units, e.g., daltons
+
+        # Compute velocity standard deviation: σ = sqrt(kT / m)
+        kT = self.kB * self.temperature  # in kJ/mol
+        sigma = (kT / mass).sqrt()       # in nm/ps
+
+        # Sample velocities from N(0, σ)
+        velocities = np.random.normal(0.0, 1.0, size=(self.N, 3)) * sigma.value_in_unit(unit.nanometer / unit.picosecond)
         
-        # Get the mass of the first particle (all particles have same mass in our case)
-        mass = self.system.getParticleMass(0)
-        
-        # Calculate standard deviation based on temperature and mass
-        sigma = np.sqrt((self.kB * self.temperature / mass)._value)
-        
-        # Generate random velocities from normal distribution
-        velocities = np.random.normal(0, sigma, size=(self.N, 3))
-        
-        # Convert velocities to OpenMM units
-        velocities = velocities * simtk.unit.nanometers / simtk.unit.picosecond
-        
+        # Assign correct units
+        velocities_quantity = unit.Quantity(velocities, unit.nanometer / unit.picosecond)
+
         # Set velocities in the context
-        self.context.setVelocities(velocities)
+        self.context.setVelocities(velocities_quantity)
+
     
     def add_force(self, force):
         """
@@ -176,6 +179,7 @@ class Simulation(object):
         start_time = time.time()
         self.integrator.step(steps)
         end_time = time.time()
+        steps_per_second = steps / (end_time - start_time)
 
         # Get state information
         self.state = self.context.getState(
@@ -184,24 +188,28 @@ class Simulation(object):
             getEnergy=True
         )
 
+        curtime_ns = self.state.getTime().value_in_unit(unit.nanosecond)
+
         # Extract coordinates and convert to numpy array
-        coords = self.state.getPositions(asNumpy=True)
-        coords = np.array(coords, dtype=np.float32)
+        coords = self.state.getPositions(asNumpy=True)  # Quantity
+        coords_nm = coords.value_in_unit(unit.nanometer)
+        coords_nm = np.array(coords_nm, dtype=np.float32)
+
+        #convert all energies to kJ/mol
+        kinetic_energy = self.state.getKineticEnergy().value_in_unit(unit.kilojoule_per_mole)
+        potential_energy = self.state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+        kT_value = self.kT.value_in_unit(unit.kilojoule_per_mole)
+
 
         # Calculate energies per particle (in units of kT)
-        eK = self.state.getKineticEnergy()._value / self.N / self.kT._value
-        eP = self.state.getPotentialEnergy()._value / self.N / self.kT._value
-        
-        # Get time in reduced units (τ)
-        curtime = self.state.getTime()._value  # This gives time in reduced units
-
-        # Calculate steps per second
-        steps_per_second = steps / (end_time - start_time)
+        print("kT:", self.kT, type(self.kT))
+        eK = kinetic_energy / (kT_value * self.N)
+        eP = potential_energy / (kT_value * self.N)
 
         # Log simulation progress
         msg = f"block {self.block:4d} "
-        msg += f"pos[1]=[{coords[0][0]:.1f} {coords[0][1]:.1f} {coords[0][2]:.1f}] "
-        msg += f"t={curtime:.1f}ps "
+        msg += f"pos[1]=[{coords_nm[0][0]:.1f} {coords_nm[0][1]:.1f} {coords_nm[0][2]:.1f}] "
+        msg += f"t={curtime_ns:.1f}ns "
         msg += f"kin={eK:.2f} pot={eP:.2f} "
         msg += f"SPS={steps_per_second:.0f}"
 
@@ -227,13 +235,14 @@ class Simulation(object):
             "pos": coords,
             "potentialEnergy": eP,
             "kineticEnergy": eK,
-            "time": curtime,
+            "time": curtime_ns,
             "block": self.block,
         }
 
         # Add velocities if requested
         if get_velocities:
-            result["vel"] = self.state.getVelocities(asNumpy=True)
+            velocities = self.state.getVelocities(asNumpy=True)
+            result["vel"] = velocities.value_in_unit(unit.nanometer / unit.picosecond)
 
         # Add any extra information
         result.update(save_extras)
@@ -245,7 +254,7 @@ class Simulation(object):
         # Update simulation state
         self.block += 1
         self.step += steps
-        self.time = curtime
+        self.time = curtime_ns
 
         return result
     

@@ -1,7 +1,7 @@
 import logging
 import time
+from openmm import unit
 import openmm as mm
-import simtk
 import numpy as np
 
 class Chromosome(object):
@@ -29,7 +29,48 @@ class Chromosome(object):
         self.bond_list = self._generate_bonds(sim_object, chains, extra_bonds)
         self.triplet_list = self._generate_triplets(sim_object, chains, extra_triplets)
         
-    def add_harmonic_bond(self, force_group=0, k=30.0, r0=1.0):
+    def add_harmonic_bond(self, force_group=0, bondWiggleDistance=0.05, bondLength=1.0):
+        """
+        Add harmonic bonds based on a physical 'wiggle' distance where energy = 1 kT.
+
+        Parameters
+        ----------
+        force_group : int
+            OpenMM force group.
+        bondWiggleDistance : float or iterable
+            Distance at which bond energy equals 1 kT. Smaller values = stiffer bonds.
+        bondLength : float or iterable
+            Equilibrium bond distance.
+        
+        Returns
+        -------
+        mm.HarmonicBondForce
+        """
+        from numpy import array, float64
+        import numpy as np
+
+        bond_force = mm.HarmonicBondForce()
+        bond_force.setForceGroup(force_group)
+
+        num_bonds = len(self.bond_list)
+        ls = bondLength
+        kT = self.sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
+
+
+        # Handle scalar or array input
+        bondLength = np.array([bondLength]*num_bonds if np.isscalar(bondLength) else bondLength, dtype=float64) * ls
+        bondWiggleDistance = np.array([bondWiggleDistance]*num_bonds if np.isscalar(bondWiggleDistance) else bondWiggleDistance, dtype=float64) * ls
+
+        # Compute k = kT / wiggle^2, in OpenMM units
+        kbond = kT / (bondWiggleDistance ** 2)
+        kbond[bondWiggleDistance == 0] = 0.0
+
+        for (i, j), r0, k in zip(self.bond_list, bondLength, kbond):
+            bond_force.addBond(int(i), int(j), float(r0), float(k))
+
+        return bond_force
+
+    def add_harmonic_bond_old(self, force_group=0, k=30.0, r0=1.0):
             """
             Create a HarmonicBondForce from self.bond_list.
 
@@ -80,7 +121,7 @@ class Chromosome(object):
         theta_array = self._to_array_1d(theta_0, len(self.triplet_list))
 
         # Convert k from kT/rad² to kJ/mol/rad²
-        k_openmm = k_array * self.sim_object.kT._value
+        k_openmm = k_array * self.sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
 
         energy = "kT * angK * 0.5 * (theta - angT0)^2"
         angle_force = mm.CustomAngleForce(energy)
@@ -137,7 +178,7 @@ class Chromosome(object):
         force.setForceGroup(3)  # Optional force group for repulsion
 
         # Global parameters
-        force.addGlobalParameter("REPe", trunc * sim_object.kT._value)
+        force.addGlobalParameter("REPe", trunc * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         force.addGlobalParameter("REPsigma", radius)
         force.addGlobalParameter("emin12", 46656.0 / 823543.0)        # For x^12*(x²−1)
         force.addGlobalParameter("rmin12", np.sqrt(6.0 / 7.0))         # Scales distance into domain
@@ -208,7 +249,7 @@ class Chromosome(object):
             force.addParticle(int(i), [])
 
         # Parameters (no units)
-        force.addGlobalParameter("kb", k * sim_object.kT._value)
+        force.addGlobalParameter("kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         force.addGlobalParameter("aa", r - 1.0 / k)
         force.addGlobalParameter("t", (1.0 / k) / 10.0)
         force.addGlobalParameter("tt", 0.01)
