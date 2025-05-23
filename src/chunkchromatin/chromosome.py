@@ -126,7 +126,7 @@ class Chromosome(object):
         energy = "kT * angK * 0.5 * (theta - angT0)^2"
         angle_force = mm.CustomAngleForce(energy)
         angle_force.setForceGroup(force_group)
-        self._add_global_parameter(angle_force, "kT", self.sim_object.kT, prefix=False)
+        self._add_global_parameter(angle_force, "kT", self.sim_object.kT)
         angle_force.addPerAngleParameter("angK")
         angle_force.addPerAngleParameter("angT0")
 
@@ -255,7 +255,7 @@ class Chromosome(object):
         self._add_global_parameter(force, "aa", r - 1.0 / k)
         self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
         self._add_global_parameter(force, "tt", 0.01)
-        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0, prefix=False)
+        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0)
 
         # Center of confinement sphere
         self._add_global_parameter(force, "x0", center[0])
@@ -445,26 +445,41 @@ class Chromosome(object):
             seen.add(t_tuple)
 
     
-    def _add_global_parameter(self, force, name, value, force_name=None, prefix=True):
+    def _add_global_parameter(self, force, name, value):
         """
-        Add a global parameter to a force with optional prefix.
+        Add a global parameter to a force. If the parameter name is used literally
+        in the energy function, it will be added as-is. Otherwise, it will be prefixed
+        with the force name to avoid collisions.
 
         Parameters
         ----------
         force : mm.Force
-            The force to add the parameter to
+            The force to add the parameter to.
         name : str
-            Name of the parameter used in energy expression
-        value : float or Quantity
-            Value of the parameter
-        force_name : str, optional
-            If prefixing, name of force to prefix
-        prefix : bool
-            Whether to prefix the parameter name
+            Name of the parameter.
+        value : float or unit.Quantity
+            Value of the parameter.
+
+        Returns
+        -------
+        str
+            The actual parameter name used.
         """
-        if prefix:
-            if force_name is None:
-                force_name = getattr(force, 'name', 'force')
-            name = f"{force_name}_{name}"
-        force.addGlobalParameter(name, value)
-        return name
+        # Check if energy expression exists and parameter is used literally
+        try:
+            energy = force.getEnergyFunction()
+            # Match full word occurrences only (avoid substrings)
+            import re
+            literal_usage = re.search(rf'\b{name}\b', energy) is not None
+        except AttributeError:
+            # Force has no energy function
+            literal_usage = False
+
+        if literal_usage:
+            param_name = name
+        else:
+            force_name = getattr(force, 'name', 'force')
+            param_name = f"{force_name}_{name}"
+
+        force.addGlobalParameter(param_name, value)
+        return param_name

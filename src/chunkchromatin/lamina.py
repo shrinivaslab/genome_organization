@@ -74,12 +74,12 @@ class Lamina(object):
             force.addParticle(int(i), [])
 
         # Parameters (no units)
-        self._add_global_parameter(force, "kT", sim_object.kT, prefix=False)
+        self._add_global_parameter(force, "kT", sim_object.kT)
         self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         self._add_global_parameter(force, "aa", r - 1.0 / k)
         self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
         self._add_global_parameter(force, "tt", 0.01)
-        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0, prefix=False)
+        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0)
         # Center of confinement sphere
         self._add_global_parameter(force, "x0", center[0])
         self._add_global_parameter(force, "y0", center[1])
@@ -126,7 +126,7 @@ class Lamina(object):
         )
         force.name = name
         # Add global parameters
-        self._add_global_parameter(force, "kT", sim_object.kT, prefix=False)
+        self._add_global_parameter(force, "kT", sim_object.kT)
         self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole) / sim_object.conlen)
         self._add_global_parameter(force, "aa", (local_radius - 1.0/k) * sim_object.conlen)
         self._add_global_parameter(force, "t", (1.0/k) * sim_object.conlen / 10.0)
@@ -161,7 +161,6 @@ class Lamina(object):
         # Add parameters
         force.name = name
 
-        self._add_global_parameter(force, "kT", sim_object.kT, prefix=False)
         self._add_global_parameter(force, "BLam", BLam * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         self._add_global_parameter(force, "R", sim_object.conlen)
         self._add_global_parameter(force, "tt2", 0.01 * 0.01)
@@ -173,26 +172,42 @@ class Lamina(object):
         
         return force
     
-    def _add_global_parameter(self, force, name, value, force_name=None, prefix=True):
+    def _add_global_parameter(self, force, name, value):
         """
-        Add a global parameter to a force with optional prefix.
+        Add a global parameter to a force. If the parameter name is used literally
+        in the energy function, it will be added as-is. Otherwise, it will be prefixed
+        with the force name to avoid collisions.
 
         Parameters
         ----------
         force : mm.Force
-            The force to add the parameter to
+            The force to add the parameter to.
         name : str
-            Name of the parameter used in energy expression
-        value : float or Quantity
-            Value of the parameter
-        force_name : str, optional
-            If prefixing, name of force to prefix
-        prefix : bool
-            Whether to prefix the parameter name
+            Name of the parameter.
+        value : float or unit.Quantity
+            Value of the parameter.
+
+        Returns
+        -------
+        str
+            The actual parameter name used.
         """
-        if prefix:
-            if force_name is None:
-                force_name = getattr(force, 'name', 'force')
-            name = f"{force_name}_{name}"
-        force.addGlobalParameter(name, value)
-        return name
+        # Check if energy expression exists and parameter is used literally
+        try:
+            energy = force.getEnergyFunction()
+            # Match full word occurrences only (avoid substrings)
+            import re
+            literal_usage = re.search(rf'\b{name}\b', energy) is not None
+        except AttributeError:
+            # Force has no energy function
+            literal_usage = False
+
+        if literal_usage:
+            param_name = name
+        else:
+            force_name = getattr(force, 'name', 'force')
+            param_name = f"{force_name}_{name}"
+
+        force.addGlobalParameter(param_name, value)
+        return param_name
+
