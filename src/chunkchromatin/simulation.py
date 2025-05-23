@@ -6,6 +6,8 @@ import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 
+class EKExceedsError(Exception):
+    pass
 
 class Simulation(object):
     def __init__(self, **kwargs):
@@ -47,6 +49,7 @@ class Simulation(object):
         self.kB = unit.BOLTZMANN_CONSTANT_kB * unit.AVOGADRO_CONSTANT_NA
         self.kT = self.temperature * self.kB
         self.conlen = kwargs.get("conlen", 1.0) * unit.nanometer
+        self.eK_critical = kwargs.get("eK_critical", 10.0)
 
         #Internal state
         self.positions = None
@@ -223,6 +226,8 @@ class Simulation(object):
                 break
 
         # Basic error checks
+        if eK > self.eK_critical and self.integrator_type.lower() != "brownian":
+            raise EKExceedsError("Ek={1} exceeds {0}".format(self.eK_critical, eK))
         if np.isnan(coords).any():
             raise RuntimeError("Coordinates contain NaN values")
         if np.isnan(eK) or np.isnan(eP):
