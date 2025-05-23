@@ -124,7 +124,7 @@ class Lamina(object):
         )
         force.name = name
         # Add global parameters
-        force.addGlobalParameter("kb", k * sim_object.kT / sim_object.conlen)
+        force.addGlobalParameter("kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole) / sim_object.conlen)
         force.addGlobalParameter("aa", (local_radius - 1.0/k) * sim_object.conlen)
         force.addGlobalParameter("t", (1.0/k) * sim_object.conlen / 10.0)
         force.addGlobalParameter("tt", 0.01 * sim_object.conlen)
@@ -146,7 +146,7 @@ class Lamina(object):
         
         return force
 
-    def add_B_monomer_lamina_attraction(sim_object, B_monomers, BLam=1.0):
+    def add_B_monomer_lamina_attraction(self,sim_object, B_monomers, BLam=1.0):
         """Implements the exact lamina attraction for B monomers as described in methods"""
         name = 'B_monomer_lamina_attraction'
         force = mm.CustomExternalForce(
@@ -156,7 +156,7 @@ class Lamina(object):
         )
         
         # Add parameters
-        force.addGlobalParameter("BLam", BLam * sim_object.kT)
+        force.addGlobalParameter("BLam", BLam * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         force.addGlobalParameter("R", sim_object.conlen)
         force.addGlobalParameter("tt2", 0.01 * 0.01)  # .01^2 as specified in methods
         force.name = name
