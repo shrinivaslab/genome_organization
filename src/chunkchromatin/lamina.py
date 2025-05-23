@@ -74,7 +74,7 @@ class Lamina(object):
             force.addParticle(int(i), [])
 
         # Parameters (no units)
-        self._add_global_parameter(force, "kT", sim_object.kT)
+        self._add_global_parameter(force, "kT", sim_object.kT, prefix=False)
         self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         self._add_global_parameter(force, "aa", r - 1.0 / k)
         self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
@@ -126,7 +126,7 @@ class Lamina(object):
         )
         force.name = name
         # Add global parameters
-        self._add_global_parameter(force, "kT", sim_object.kT)
+        self._add_global_parameter(force, "kT", sim_object.kT, prefix=False)
         self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole) / sim_object.conlen)
         self._add_global_parameter(force, "aa", (local_radius - 1.0/k) * sim_object.conlen)
         self._add_global_parameter(force, "t", (1.0/k) * sim_object.conlen / 10.0)
@@ -161,7 +161,7 @@ class Lamina(object):
         # Add parameters
         force.name = name
 
-        self._add_global_parameter(force, "kT", sim_object.kT)
+        self._add_global_parameter(force, "kT", sim_object.kT, prefix=False)
         self._add_global_parameter(force, "BLam", BLam * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         self._add_global_parameter(force, "R", sim_object.conlen)
         self._add_global_parameter(force, "tt2", 0.01 * 0.01)
@@ -173,23 +173,26 @@ class Lamina(object):
         
         return force
     
-    def _add_global_parameter(self, force, name, value, force_name=None):
+    def _add_global_parameter(self, force, name, value, force_name=None, prefix=True):
         """
-        Add a global parameter to a force with a prefixed name to avoid conflicts.
-        
+        Add a global parameter to a force with optional prefix.
+
         Parameters
         ----------
         force : mm.Force
             The force to add the parameter to
         name : str
-            Base name of the parameter
-        value : float or unit.Quantity
+            Name of the parameter used in energy expression
+        value : float or Quantity
             Value of the parameter
         force_name : str, optional
-            Name of the force to use as prefix. If None, uses force.name
+            If prefixing, name of force to prefix
+        prefix : bool
+            Whether to prefix the parameter name
         """
-        if force_name is None:
-            force_name = getattr(force, 'name', 'force')
-        prefixed_name = f"{force_name}_{name}"
-        force.addGlobalParameter(prefixed_name, value)
-        return prefixed_name
+        if prefix:
+            if force_name is None:
+                force_name = getattr(force, 'name', 'force')
+            name = f"{force_name}_{name}"
+        force.addGlobalParameter(name, value)
+        return name

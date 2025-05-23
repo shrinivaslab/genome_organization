@@ -126,7 +126,7 @@ class Chromosome(object):
         energy = "kT * angK * 0.5 * (theta - angT0)^2"
         angle_force = mm.CustomAngleForce(energy)
         angle_force.setForceGroup(force_group)
-        self._add_global_parameter(angle_force, "kT", self.sim_object.kT)
+        self._add_global_parameter(angle_force, "kT", self.sim_object.kT, prefix=False)
         angle_force.addPerAngleParameter("angK")
         angle_force.addPerAngleParameter("angT0")
 
@@ -444,23 +444,27 @@ class Chromosome(object):
                 raise ValueError(f"Duplicate angle triplet found: {t}")
             seen.add(t_tuple)
 
-    def _add_global_parameter(self, force, name, value, force_name=None):
+    
+    def _add_global_parameter(self, force, name, value, force_name=None, prefix=True):
         """
-        Add a global parameter to a force with a prefixed name to avoid conflicts.
-        
+        Add a global parameter to a force with optional prefix.
+
         Parameters
         ----------
         force : mm.Force
             The force to add the parameter to
         name : str
-            Base name of the parameter
-        value : float or unit.Quantity
+            Name of the parameter used in energy expression
+        value : float or Quantity
             Value of the parameter
         force_name : str, optional
-            Name of the force to use as prefix. If None, uses force.name
+            If prefixing, name of force to prefix
+        prefix : bool
+            Whether to prefix the parameter name
         """
-        if force_name is None:
-            force_name = getattr(force, 'name', 'force')
-        prefixed_name = f"{force_name}_{name}"
-        force.addGlobalParameter(prefixed_name, value)
-        return prefixed_name
+        if prefix:
+            if force_name is None:
+                force_name = getattr(force, 'name', 'force')
+            name = f"{force_name}_{name}"
+        force.addGlobalParameter(name, value)
+        return name
