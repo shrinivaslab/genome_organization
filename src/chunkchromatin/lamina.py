@@ -66,6 +66,7 @@ class Lamina(object):
         )
 
         force = mm.CustomExternalForce(energy_expr)
+        force.name = name
 
         # Add particles
         particles = range(sim_object.N) if particles is None else particles
@@ -73,7 +74,7 @@ class Lamina(object):
             force.addParticle(int(i), [])
 
         # Parameters (no units)
-        force.name = name
+        self._add_global_parameter(force, "kT", sim_object.kT)
         self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         self._add_global_parameter(force, "aa", r - 1.0 / k)
         self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
@@ -125,6 +126,7 @@ class Lamina(object):
         )
         force.name = name
         # Add global parameters
+        self._add_global_parameter(force, "kT", sim_object.kT)
         self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole) / sim_object.conlen)
         self._add_global_parameter(force, "aa", (local_radius - 1.0/k) * sim_object.conlen)
         self._add_global_parameter(force, "t", (1.0/k) * sim_object.conlen / 10.0)
@@ -159,6 +161,7 @@ class Lamina(object):
         # Add parameters
         force.name = name
 
+        self._add_global_parameter(force, "kT", sim_object.kT)
         self._add_global_parameter(force, "BLam", BLam * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
         self._add_global_parameter(force, "R", sim_object.conlen)
         self._add_global_parameter(force, "tt2", 0.01 * 0.01)
