@@ -51,6 +51,7 @@ class Lamina(object):
         CustomExternalForce
             The spherical confinement potential.
         """
+        name = 'spherical_confinement'
         # Calculate radius from density if requested
         if r == "density":
             r = (3 * sim_object.N / (4 * np.pi * density)) ** (1.0 / 3.0)
@@ -72,16 +73,16 @@ class Lamina(object):
             force.addParticle(int(i), [])
 
         # Parameters (no units)
-        force.addGlobalParameter("kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
-        force.addGlobalParameter("aa", r - 1.0 / k)
-        force.addGlobalParameter("t", (1.0 / k) / 10.0)
-        force.addGlobalParameter("tt", 0.01)
-        force.addGlobalParameter("invert_sign", -1.0 if invert else 1.0)
-
+        force.name = name
+        self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
+        self._add_global_parameter(force, "aa", r - 1.0 / k)
+        self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
+        self._add_global_parameter(force, "tt", 0.01)
+        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0)
         # Center of confinement sphere
-        force.addGlobalParameter("x0", center[0])
-        force.addGlobalParameter("y0", center[1])
-        force.addGlobalParameter("z0", center[2])
+        self._add_global_parameter(force, "x0", center[0])
+        self._add_global_parameter(force, "y0", center[1])
+        self._add_global_parameter(force, "z0", center[2])
 
         sim_object.sphericalConfinementRadius = r  # for bookkeeping
 
@@ -124,13 +125,13 @@ class Lamina(object):
         )
         force.name = name
         # Add global parameters
-        force.addGlobalParameter("kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole) / sim_object.conlen)
-        force.addGlobalParameter("aa", (local_radius - 1.0/k) * sim_object.conlen)
-        force.addGlobalParameter("t", (1.0/k) * sim_object.conlen / 10.0)
-        force.addGlobalParameter("tt", 0.01 * sim_object.conlen)
-        force.addGlobalParameter("x0", center_x * sim_object.conlen)
-        force.addGlobalParameter("y0", center_y * sim_object.conlen)
-        force.addGlobalParameter("z0", center_z * sim_object.conlen)
+        self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole) / sim_object.conlen)
+        self._add_global_parameter(force, "aa", (local_radius - 1.0/k) * sim_object.conlen)
+        self._add_global_parameter(force, "t", (1.0/k) * sim_object.conlen / 10.0)
+        self._add_global_parameter(force, "tt", 0.01 * sim_object.conlen)
+        self._add_global_parameter(force, "x0", center_x * sim_object.conlen)
+        self._add_global_parameter(force, "y0", center_y * sim_object.conlen)
+        self._add_global_parameter(force, "z0", center_z * sim_object.conlen)
         
         # Add only C monomers
         for particle in C_monomers:
@@ -156,13 +157,36 @@ class Lamina(object):
         )
         
         # Add parameters
-        force.addGlobalParameter("BLam", BLam * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
-        force.addGlobalParameter("R", sim_object.conlen)
-        force.addGlobalParameter("tt2", 0.01 * 0.01)  # .01^2 as specified in methods
         force.name = name
+
+        self._add_global_parameter(force, "BLam", BLam * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
+        self._add_global_parameter(force, "R", sim_object.conlen)
+        self._add_global_parameter(force, "tt2", 0.01 * 0.01)
+        
 
         # Add only B monomers
         for particle in B_monomers:
             force.addParticle(particle, [])
         
         return force
+    
+    def _add_global_parameter(self, force, name, value, force_name=None):
+        """
+        Add a global parameter to a force with a prefixed name to avoid conflicts.
+        
+        Parameters
+        ----------
+        force : mm.Force
+            The force to add the parameter to
+        name : str
+            Base name of the parameter
+        value : float or unit.Quantity
+            Value of the parameter
+        force_name : str, optional
+            Name of the force to use as prefix. If None, uses force.name
+        """
+        if force_name is None:
+            force_name = getattr(force, 'name', 'force')
+        prefixed_name = f"{force_name}_{name}"
+        force.addGlobalParameter(prefixed_name, value)
+        return prefixed_name
