@@ -258,6 +258,34 @@ class Simulation(object):
 
         return result
     
+    def get_positions(self, as_numpy=True, in_units=unit.nanometer):
+        """
+        Get the current positions of the particles from the context.
+
+        Parameters
+        ----------
+        as_numpy : bool
+            If True, returns a NumPy array. If False, returns an OpenMM Quantity.
+        in_units : unit
+            Desired unit for returned positions.
+
+        Returns
+        -------
+        np.ndarray or Quantity
+            Current positions of particles.
+        """
+        if not hasattr(self, "context"):
+            raise RuntimeError("Context has not been created.")
+        
+        state = self.context.getState(getPositions=True)
+        pos = state.getPositions(asNumpy=as_numpy)
+
+        if as_numpy:
+            return pos.value_in_unit(in_units)
+        else:
+            return pos
+
+    
     def save_initial_state(self):
         """
         Save initial simulation state using the reporter if available.
