@@ -126,7 +126,7 @@ class Chromosome(object):
         energy = "kT * angK * 0.5 * (theta - angT0)^2"
         angle_force = mm.CustomAngleForce(energy)
         angle_force.setForceGroup(force_group)
-        angle_force.addGlobalParameter("kT", self.sim_object.kT)
+        self._add_global_parameter(angle_force, "kT", self.sim_object.kT)
         angle_force.addPerAngleParameter("angK")
         angle_force.addPerAngleParameter("angT0")
 
@@ -176,12 +176,13 @@ class Chromosome(object):
         force.setCutoffDistance(radius)
         force.setNonbondedMethod(mm.CustomNonbondedForce.CutoffNonPeriodic)
         force.setForceGroup(3)  # Optional force group for repulsion
+        force.name = name
 
         # Global parameters
-        force.addGlobalParameter("REPe", trunc * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
-        force.addGlobalParameter("REPsigma", radius)
-        force.addGlobalParameter("emin12", 46656.0 / 823543.0)        # For x^12*(x²−1)
-        force.addGlobalParameter("rmin12", np.sqrt(6.0 / 7.0))         # Scales distance into domain
+        self._add_global_parameter(force, "REPe", trunc * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
+        self._add_global_parameter(force, "REPsigma", radius)
+        self._add_global_parameter(force, "emin12", 46656.0 / 823543.0)        # For x^12*(x²−1)
+        self._add_global_parameter(force, "rmin12", np.sqrt(6.0 / 7.0))         # Scales distance into domain
 
         # Add particles
         for _ in range(sim_object.N):
@@ -242,6 +243,7 @@ class Chromosome(object):
         )
 
         force = mm.CustomExternalForce(energy_expr)
+        force.name = name
 
         # Add particles
         particles = range(sim_object.N) if particles is None else particles
@@ -249,16 +251,16 @@ class Chromosome(object):
             force.addParticle(int(i), [])
 
         # Parameters (no units)
-        force.addGlobalParameter("kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
-        force.addGlobalParameter("aa", r - 1.0 / k)
-        force.addGlobalParameter("t", (1.0 / k) / 10.0)
-        force.addGlobalParameter("tt", 0.01)
-        force.addGlobalParameter("invert_sign", -1.0 if invert else 1.0)
+        self._add_global_parameter(force, "kb", k * sim_object.kT.value_in_unit(unit.kilojoule_per_mole))
+        self._add_global_parameter(force, "aa", r - 1.0 / k)
+        self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
+        self._add_global_parameter(force, "tt", 0.01)
+        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0)
 
         # Center of confinement sphere
-        force.addGlobalParameter("x0", center[0])
-        force.addGlobalParameter("y0", center[1])
-        force.addGlobalParameter("z0", center[2])
+        self._add_global_parameter(force, "x0", center[0])
+        self._add_global_parameter(force, "y0", center[1])
+        self._add_global_parameter(force, "z0", center[2])
 
         sim_object.sphericalConfinementRadius = r  # for bookkeeping
 
@@ -340,16 +342,17 @@ class Chromosome(object):
         force.setCutoffDistance(rCutoff * sim_object.conlen)
         force.setNonbondedMethod(mm.CustomNonbondedForce.CutoffNonPeriodic)
         force.setForceGroup(2)  # Optional: assign to group 2 for analysis
+        force.name = name
 
         # Global parameters
-        force.addGlobalParameter("rCutoff", rCutoff)
-        force.addGlobalParameter("c1", c1)
-        force.addGlobalParameter("c2", c2)
-        force.addGlobalParameter("lambda_sticky", 1.0)
+        self._add_global_parameter(force, "rCutoff", rCutoff)
+        self._add_global_parameter(force, "c1", c1)
+        self._add_global_parameter(force, "c2", c2)
+        self._add_global_parameter(force, "lambda_sticky", 1.0)
 
         for i, j in indexpairs:
             param_name = f"INT_{i}_{j}"
-            force.addGlobalParameter(param_name, interactionMatrix[i, j])
+            self._add_global_parameter(force, param_name, interactionMatrix[i, j])
 
         # Per-particle parameter
         force.addPerParticleParameter("type")
@@ -440,3 +443,24 @@ class Chromosome(object):
             if t_tuple in seen:
                 raise ValueError(f"Duplicate angle triplet found: {t}")
             seen.add(t_tuple)
+
+    def _add_global_parameter(self, force, name, value, force_name=None):
+        """
+        Add a global parameter to a force with a prefixed name to avoid conflicts.
+        
+        Parameters
+        ----------
+        force : mm.Force
+            The force to add the parameter to
+        name : str
+            Base name of the parameter
+        value : float or unit.Quantity
+            Value of the parameter
+        force_name : str, optional
+            Name of the force to use as prefix. If None, uses force.name
+        """
+        if force_name is None:
+            force_name = getattr(force, 'name', 'force')
+        prefixed_name = f"{force_name}_{name}"
+        force.addGlobalParameter(prefixed_name, value)
+        return prefixed_name
