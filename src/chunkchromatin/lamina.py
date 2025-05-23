@@ -10,10 +10,6 @@ class Lamina(object):
         Initialize a lamina object.
         """
         self.N = kwargs.get("N")
-        self.kT = kwargs.get("kT")
-        self.conlen = kwargs.get("conlen")
-        
-        self.N = kwargs.get("N")
         self.chains = kwargs.get("chains")
         self.sim_object = kwargs.get("sim_object")
 
