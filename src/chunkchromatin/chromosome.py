@@ -298,7 +298,7 @@ class Chromosome(object):
         CustomNonbondedForce
         """
 
-        Ntypes = max(monomerTypes) + 1
+        Ntypes = np.max(monomerTypes) + 1
         if interactionMatrix.shape[0] < Ntypes or interactionMatrix.shape[1] < Ntypes:
             raise ValueError(f"Interaction matrix must cover all {Ntypes} types.")
         if not np.allclose(interactionMatrix.T, interactionMatrix):
