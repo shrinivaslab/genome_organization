@@ -112,7 +112,7 @@ class Lamina(object):
         phi = np.arccos(2 * np.random.random() - 1)
         
         # Convert to Cartesian coordinates on the lamina
-        R = sim_object.length_scale  # radius of main confining sphere
+        R = sim_object.conlen  # radius of main confining sphere
         center_x = R * np.sin(phi) * np.cos(theta)
         center_y = R * np.sin(phi) * np.sin(theta)
         center_z = R * np.cos(phi)
@@ -157,7 +157,7 @@ class Lamina(object):
         
         # Add parameters
         force.addGlobalParameter("BLam", BLam * sim_object.kT)
-        force.addGlobalParameter("R", sim_object.length_scale)
+        force.addGlobalParameter("R", sim_object.conlen)
         force.addGlobalParameter("tt2", 0.01 * 0.01)  # .01^2 as specified in methods
         force.name = name
 
