@@ -5,13 +5,13 @@ import openmm as mm
 import numpy as np
 
 class Lamina(object):
-    def __init__(self, **kwargs):
+    def __init__(self, N, chains, sim_object):
         """
         Initialize a lamina object.
         """
-        self.N = kwargs.get("N")
-        self.chains = kwargs.get("chains")
-        self.sim_object = kwargs.get("sim_object")
+        self.N = N
+        self.chains = chains
+        self.sim_object = sim_object
 
     def add_spherical_confinement(
         self,
