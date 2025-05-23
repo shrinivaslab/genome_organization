@@ -79,7 +79,7 @@ class Lamina(object):
         self._add_global_parameter(force, "aa", r - 1.0 / k)
         self._add_global_parameter(force, "t", (1.0 / k) / 10.0)
         self._add_global_parameter(force, "tt", 0.01)
-        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0)
+        self._add_global_parameter(force, "invert_sign", -1.0 if invert else 1.0, prefix=False)
         # Center of confinement sphere
         self._add_global_parameter(force, "x0", center[0])
         self._add_global_parameter(force, "y0", center[1])
