@@ -3,6 +3,7 @@ pyproject.toml
 setup.py
 src/chunkchromatin/chromosome.py
 src/chunkchromatin/hdf5_format.py
+src/chunkchromatin/lamina.py
 src/chunkchromatin/simulation.py
 src/genome_organization.egg-info/PKG-INFO
 src/genome_organization.egg-info/SOURCES.txt
