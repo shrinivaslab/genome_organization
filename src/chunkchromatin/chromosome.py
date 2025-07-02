@@ -447,39 +447,36 @@ class Chromosome(object):
     
     def _add_global_parameter(self, force, name, value):
         """
-        Add a global parameter to a force. If the parameter name is used literally
-        in the energy function, it will be added as-is. Otherwise, it will be prefixed
-        with the force name to avoid collisions.
+        Add a unique global parameter to the force, rewriting the energy expression
+        to include the unique (prefixed) name if necessary.
 
         Parameters
         ----------
         force : mm.Force
             The force to add the parameter to.
         name : str
-            Name of the parameter.
+            Desired base name of the parameter.
         value : float or unit.Quantity
-            Value of the parameter.
+            Parameter value.
 
         Returns
         -------
         str
-            The actual parameter name used.
+            The actual parameter name used (with prefix).
         """
-        # Check if energy expression exists and parameter is used literally
-        try:
+        # Always use prefixed name
+        force_name = getattr(force, 'name', 'force')
+        unique_name = f"{force_name}_{name}"
+
+        # Replace in energy expression if needed
+        if hasattr(force, 'getEnergyFunction'):
             energy = force.getEnergyFunction()
-            # Match full word occurrences only (avoid substrings)
             import re
-            literal_usage = re.search(rf'\b{name}\b', energy) is not None
-        except AttributeError:
-            # Force has no energy function
-            literal_usage = False
+            # Replace only whole word matches
+            energy = re.sub(rf'\b{name}\b', unique_name, energy)
+            force.setEnergyFunction(energy)
 
-        if literal_usage:
-            param_name = name
-        else:
-            force_name = getattr(force, 'name', 'force')
-            param_name = f"{force_name}_{name}"
+        # Add the global parameter with the new unique name
+        force.addGlobalParameter(unique_name, value)
+        return unique_name
 
-        force.addGlobalParameter(param_name, value)
-        return param_name
