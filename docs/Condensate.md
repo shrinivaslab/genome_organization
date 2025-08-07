@@ -45,3 +45,7 @@ Where:
 
 A separate **cutoff distance** (typically \( \sim 2.5\sigma \) or higher) is used to truncate the interaction for computational efficiency. In this implementation, the cutoff is currently fixed to 3.0 (in reduced units), independent of σ.
 
+
+
+
+
