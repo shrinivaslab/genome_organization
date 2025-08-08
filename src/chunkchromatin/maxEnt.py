@@ -241,3 +241,267 @@ class MaxEnt_sim_obs:
 
         return output
 
+############################## sim_obs V2 ####################################
+import numpy as np
+from scipy.spatial import cKDTree
+import struct
+import os
+import contextlib
+from krbalancing import kr_balancing
+
+# --- optional: use numba if present for the tiny accumulator ---
+try:
+    from numba import njit
+    _HAVE_NUMBA = True
+except Exception:
+    _HAVE_NUMBA = False
+    def njit(*args, **kwargs):
+        def _wrap(f): return f
+        return _wrap
+
+
+@njit
+def _accumulate_type_type_edges_numba(iu, ju, d, monomer_types, n_types):
+    """
+    Upper-tri edges only (i<j). Adds symmetric contributions.
+    """
+    out = np.zeros((n_types, n_types), np.float64)
+    for k in range(iu.shape[0]):
+        ii = iu[k]
+        jj = ju[k]
+        val = d[ii] * d[jj]
+        ti = int(monomer_types[ii])
+        tj = int(monomer_types[jj])
+        out[ti, tj] += val
+        out[tj, ti] += val  # symmetry
+    s = out.sum()
+    if s > 0.0:
+        out /= s
+    return out
+
+
+def _accumulate_type_type_edges_py(iu, ju, d, monomer_types, n_types):
+    out = np.zeros((n_types, n_types), dtype=np.float64)
+    ti = monomer_types[iu].astype(np.int64, copy=False)
+    tj = monomer_types[ju].astype(np.int64, copy=False)
+    vals = d[iu] * d[ju]
+    # add upper
+    np.add.at(out, (ti, tj), vals)
+    # and mirror for symmetry
+    np.add.at(out, (tj, ti), vals)
+    s = out.sum()
+    if s > 0.0:
+        out /= s
+    return out
+
+
+def _pairs_to_csr_from_upper(N, iu, ju):
+    """
+    Build CSR adjacency from upper-triangle pairs (i<j) by symmetrizing.
+    Returns (indptr, indices, data) where data is float64 ones.
+    """
+    if iu.size == 0:
+        # empty matrix
+        indptr = np.zeros(N + 1, dtype=np.int64)
+        indices = np.zeros(0, dtype=np.int64)
+        data = np.zeros(0, dtype=np.float64)
+        return indptr, indices, data
+
+    # Symmetrize edges: (i,j) and (j,i)
+    rows = np.concatenate([iu, ju]).astype(np.int64, copy=False)
+    cols = np.concatenate([ju, iu]).astype(np.int64, copy=False)
+
+    # Stable sort by row to pack CSR
+    order = np.argsort(rows, kind='mergesort')
+    rows = rows[order]
+    cols = cols[order]
+
+    # Build indptr via bincount
+    indptr = np.zeros(N + 1, dtype=np.int64)
+    counts = np.bincount(rows, minlength=N)
+    np.cumsum(counts, out=indptr[1:])
+
+    indices = cols  # already aligned with 'rows' order
+    data = np.ones_like(indices, dtype=np.float64)
+    return indptr, indices, data
+
+
+class MaxEnt_sim_obs_v2:
+    """
+    Faster version of MaxEnt_sim_obs that:
+      - avoids building dense contact maps
+      - runs KR on a sparse CSR built directly from KDTree pairs
+      - uses only the KR diagonal vector 'd' to accumulate type–type over edges
+      - never densifies the balanced matrix
+
+    API kept similar to your original for easy swap-in.
+    """
+
+    def __init__(self, n_types=5, cutoff=2.5, leafsize=40, kr_rescale_vector=False):
+        """
+        Parameters
+        ----------
+        n_types : int
+            Number of monomer types.
+        cutoff : float
+            Cutoff distance to define a contact (in reduced units).
+        leafsize : int
+            Leaf size for KDTree contact search.
+        kr_rescale_vector : bool
+            If True, call KR's rescale pass on the normalization vector (extra O(nnz) work).
+            Usually not needed because we normalize the final type–type matrix anyway.
+        """
+        self.n_types = n_types
+        self.cutoff = cutoff
+        self.leafsize = leafsize
+        self.kr_rescale_vector = kr_rescale_vector
+
+        # pick the accumulator impl
+        self._accum_fn = _accumulate_type_type_edges_numba if _HAVE_NUMBA else _accumulate_type_type_edges_py
+
+    # ---------- I/O ----------
+
+    @staticmethod
+    def load_all_positions(filename):
+        """
+        Load all particle positions from a binary .traj file.
+        Returns array (n_frames, n_particles, 3)
+        """
+        HEADER_FORMAT = "<4sBHII16s"
+        HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+        with open(filename, 'rb') as f:
+            header = f.read(HEADER_SIZE)
+            magic, version, n_particles, frame_size, n_frames, _ = struct.unpack(HEADER_FORMAT, header)
+            assert magic == b'CHRM'
+            metadata_len = struct.unpack("<I", f.read(4))[0]
+            f.seek(HEADER_SIZE + 4 + metadata_len)
+            data = np.frombuffer(f.read(), dtype=np.float32)
+            return data.reshape((n_frames, n_particles, 3))
+
+    # ---------- geometry → edges ----------
+
+    def compute_pairs_frame(self, pos):
+        """
+        Return upper-triangle neighbor pairs (i<j) within cutoff using KDTree.
+        pos: (N,3)
+        returns iu, ju as int64 arrays (same length), each i<j
+        """
+        pairs = cKDTree(pos, leafsize=self.leafsize).query_pairs(self.cutoff, output_type="ndarray")
+        if pairs.size == 0:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+        iu = pairs[:, 0].astype(np.int64, copy=False)
+        ju = pairs[:, 1].astype(np.int64, copy=False)
+        return iu, ju
+
+    # ---------- KR on sparse adjacency ----------
+
+    @contextlib.contextmanager
+    def suppress_stdout_stderr(self):
+        # keep your suppression helper for KR verbosity
+        with open(os.devnull, 'w') as devnull:
+            old_stdout_fd = os.dup(1)
+            old_stderr_fd = os.dup(2)
+            try:
+                os.dup2(devnull.fileno(), 1)
+                os.dup2(devnull.fileno(), 2)
+                yield
+            finally:
+                os.dup2(old_stdout_fd, 1)
+                os.dup2(old_stderr_fd, 2)
+                os.close(old_stdout_fd)
+                os.close(old_stderr_fd)
+
+    def kr_vector_from_pairs(self, N, iu, ju):
+        """
+        Build CSR from upper-tri pairs and run KR to get the diagonal vector d.
+        Returns a dense np.ndarray 'd' of length N (float64).
+        """
+        # Build CSR for full N×N (symmetric)
+        indptr, indices, data = _pairs_to_csr_from_upper(N, iu, ju)
+
+        # Hand to KR (constructor adds a tiny diagonal; zero-rows become nonzero)
+        with self.suppress_stdout_stderr():
+            kr = kr_balancing(
+                int(N), int(N), int(data.size),
+                indptr.astype(np.int64, copy=False),
+                indices.astype(np.int64, copy=False),
+                data.astype(np.float64, copy=False),
+            )
+            kr.computeKR()
+            # prefer not to rescale; we normalize at the end
+            rescale = bool(self.kr_rescale_vector)
+            x_sparse = kr.get_normalisation_vector(rescale)
+            # x is returned as an Eigen sparse column vector; convert once to dense
+            # The previous code used .todense(); keep that for safety.
+            d = np.array(x_sparse.todense(), dtype=np.float64).ravel()
+            # If KR returned a subvector (shouldn't, given identity added), pad if needed
+            if d.shape[0] != N:
+                dd = np.zeros(N, dtype=np.float64)
+                dd[:d.shape[0]] = d
+                d = dd
+        return d
+
+    # ---------- final observable per frame ----------
+
+    def type_type_from_edges_and_d(self, N, iu, ju, d, monomer_types):
+        """
+        Produce (n_types, n_types) from edges (upper) and KR vector d.
+        """
+        if iu.size == 0:
+            return np.full((self.n_types, self.n_types), np.nan, dtype=np.float64)
+        # Safety checks
+        assert monomer_types.shape[0] == N
+        return self._accum_fn(iu, ju, d, monomer_types, self.n_types)
+
+    # ---------- main driver ----------
+
+    def compute_sim_type_type_observables_streaming(self, traj_file=None, monomer_types=None, positions=None, verbose=True):
+        """
+        Compute per-frame type–type observables.
+        You can pass positions directly (n_frames,N,3) or a traj file path.
+
+        Returns: array (n_frames, n_types, n_types)
+        """
+        if positions is None:
+            assert traj_file is not None, "Provide traj_file or positions."
+            positions = self.load_all_positions(traj_file)
+            src_label = traj_file
+        else:
+            src_label = "in-memory positions"
+
+        n_frames, N, _ = positions.shape
+        assert monomer_types is not None, "monomer_types is required."
+        assert len(monomer_types) == N, "monomer_types must match number of particles"
+        monomer_types = np.asarray(monomer_types)
+
+        out = np.zeros((n_frames, self.n_types, self.n_types), dtype=np.float64)
+        if verbose:
+            print(f"[v2] Processing {src_label} ({n_frames} frames, N={N})  |  cutoff={self.cutoff}")
+
+        # lazy import tqdm only if verbose
+        pbar = range(n_frames)
+        if verbose:
+            try:
+                from tqdm import tqdm  # local import
+                pbar = tqdm(pbar, desc="Frames(v2)")
+            except Exception:
+                pass
+
+        for f in pbar:
+            pos = positions[f]
+
+            # 1) geometry → upper-tri neighbor pairs
+            iu, ju = self.compute_pairs_frame(pos)
+
+            if iu.size == 0:
+                out[f] = np.full((self.n_types, self.n_types), np.nan, dtype=np.float64)
+                continue
+
+            # 2) KR diagonal vector from sparse adjacency
+            d = self.kr_vector_from_pairs(N, iu, ju)
+
+            # 3) accumulate type–type using edges and d (O(E), no dense N×N)
+            out[f] = self.type_type_from_edges_and_d(N, iu, ju, d, monomer_types)
+
+        return out
+
