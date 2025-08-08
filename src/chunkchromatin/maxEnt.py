@@ -184,48 +184,60 @@ class MaxEnt_sim_obs:
 
         return contact_sums
 
-    def compute_sim_type_type_observables_streaming(self, traj_file, monomer_types, verbose=True):
-        """
-        Main pipeline to compute type-type observable matrix per frame.
+    # --- PATCHED MaxEnt_sim_obs method ---
+def compute_sim_type_type_observables_streaming(self, traj_file=None, monomer_types=None, positions=None, verbose=True):
+    """
+    Compute per-frame type-type observables.
 
-        Parameters
-        ----------
-        traj_file : str
-            Path to the .traj file.
-        monomer_types : np.ndarray
-            Monomer type labels of shape (N,).
-        verbose : bool
-            Whether to print progress info.
+    You must provide EITHER `positions` (preferred when throttling I/O) OR `traj_file`.
+    If `positions` is provided, the method will NOT read from disk.
 
-        Returns
-        -------
-        np.ndarray
-            Array of shape (n_frames, n_types, n_types)
-        """
+    Parameters
+    ----------
+    traj_file : str or None
+        Path to .traj file (used only if positions is None).
+    monomer_types : np.ndarray
+        Monomer type labels of shape (N,).
+    positions : np.ndarray or None
+        Preloaded positions of shape (n_frames, N, 3). If provided, skip disk I/O.
+    verbose : bool
+
+    Returns
+    -------
+    np.ndarray
+        Array (n_frames, n_types, n_types)
+    """
+    if positions is None:
+        assert traj_file is not None, "Provide traj_file or positions."
         positions = self.load_all_positions(traj_file)
-        n_frames, N, _ = positions.shape
-        assert len(monomer_types) == N, "monomer_types must match number of particles"
+        src_label = traj_file
+    else:
+        src_label = "in-memory positions"
 
-        output = np.zeros((n_frames, self.n_types, self.n_types), dtype=float)
-        if verbose:
-            print(f"Processing {traj_file} ({n_frames} frames, N={N})")
+    n_frames, N, _ = positions.shape
+    assert monomer_types is not None, "monomer_types is required."
+    assert len(monomer_types) == N, "monomer_types must match number of particles"
 
-        with tqdm(total=n_frames, desc="Frames") as pbar:
-            for f in range(n_frames):
-                pos = positions[f]
-                contact_map = self.compute_contact_map_frame(pos)
-                try:
-                    upper_values, tri_i, tri_j, shape, correction, valid_idx = self.kr_balance_hic_matrix_upper(
-                        contact_map,
-                        rescale=True
-                    )
-                    obs = self.compute_type_type_vectorized(
-                        upper_values, tri_i, tri_j, shape, monomer_types
-                    )
-                except ValueError:
-                    obs = np.full((self.n_types, self.n_types), np.nan)
+    output = np.zeros((n_frames, self.n_types, self.n_types), dtype=float)
+    if verbose:
+        print(f"Processing {src_label} ({n_frames} frames, N={N})")
 
-                output[f] = obs
-                pbar.update(1)
+    from tqdm import tqdm
+    with tqdm(total=n_frames, desc="Frames") as pbar:
+        for f in range(n_frames):
+            pos = positions[f]
+            contact_map = self.compute_contact_map_frame(pos)
+            try:
+                upper_values, tri_i, tri_j, shape, correction, valid_idx = self.kr_balance_hic_matrix_upper(
+                    contact_map, rescale=True
+                )
+                obs = self.compute_type_type_vectorized(
+                    upper_values, tri_i, tri_j, shape, monomer_types
+                )
+            except ValueError:
+                obs = np.full((self.n_types, self.n_types), np.nan)
+            output[f] = obs
+            pbar.update(1)
 
-        return output
+    return output
+
