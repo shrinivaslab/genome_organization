@@ -509,24 +509,25 @@ import numpy as np
 from typing import Iterable, List, Optional, Tuple
 from scipy.spatial.distance import cdist
 
+import numpy as np
+from typing import Iterable, List, Optional, Tuple
+from scipy.spatial.distance import cdist
+
 class MaxEntTypesObs:
     """
     Utilities to compute type–type block-mean observables
-    for simulation frames (from positions) and for experimental maps (post-KR).
+    for simulation frames (from positions) and for experimental maps.
 
-    Notes
-    -----
-    - All methods exclude the diagonal (i == j).
-    - "Neighbors" removal zeros entries with |i - j| <= band_width.
-    - For SAME-TYPE blocks (A == B), unordered pairs are enforced via (i < j)
-      with denominator C(|A|, 2). For DIFFERENT-TYPE blocks (A != B), the
-      rectangle A x B is used once with denominator |A| * |B|.
-    - Accumulation is done tile-by-tile over the bead-index upper triangle to
-      avoid dense N×N memory; every pair is visited exactly once.
-    - Outputs are symmetric (upper mirrored to lower) for convenience.
+    All methods:
+    - Exclude diagonal (i == j).
+    - Optionally remove near-diagonal genomic neighbors: |i-j| <= band_width → 0.
+    - SAME-TYPE blocks (A==B): use unordered pairs i<j with denominator C(|A|,2).
+      DIFFERENT-TYPE blocks (A!=B): use rectangle A x B once with denominator |A||B|.
+    - Tile over the upper triangle of bead indices to avoid dense N×N storage.
+    - Return symmetric (upper mirrored to lower) by default.
     """
 
-    # --------------- public entry points -----------------
+    # -------------------- SIMULATION (unchanged from prior checkpoint) --------------------
 
     @staticmethod
     def sim_type_type_block_means_frame(
@@ -553,52 +554,37 @@ class MaxEntTypesObs:
         N = pos.shape[0]
         type_idx = MaxEntTypesObs._prepare_type_indices(monomer_types, n_types)
 
-        # Accumulators (numerators and denominators per type block)
         num = np.zeros((n_types, n_types), dtype=dtype)
         den = np.zeros((n_types, n_types), dtype=dtype)
 
-        # Tile over upper triangle of bead indices
         for I, J in MaxEntTypesObs._tile_pairs(N, tile_size):
-            # distances tile (simulation path)
-            D = cdist(pos[I], pos[J])  # (len(I), len(J)) float64
+            D = cdist(pos[I], pos[J])  # (len(I), len(J))
 
-            # exclude diagonal within the tile if I == J
             if I.start == J.start and I.stop == J.stop:
                 np.fill_diagonal(D, np.inf)
 
-            # convert to P according to mode
             if mode == "binary":
-                # hard geometry cutoff
                 P = (D < r_cut).astype(dtype, copy=False)
             elif mode == "soft":
-                # sigmoid + soft cutoff
                 P = 0.5 * (1.0 + np.tanh(mu * (r_cut - D)))
                 if p_min < 1.0:
                     P[P < p_min] = 0.0
-                # ensure diagonal excluded even if tanh ~1 on zero distance
                 if I.start == J.start and I.stop == J.stop:
                     np.fill_diagonal(P, 0.0)
             else:
                 raise ValueError("mode must be 'binary' or 'soft'")
 
-            # genomic neighbor removal: |i-j| <= band_width → 0
             if band_width > 0:
                 MaxEntTypesObs._apply_band_mask_inplace(P, I, J, band_width)
 
-            # accumulate into type blocks without double counting
-            MaxEntTypesObs._accumulate_type_blocks_tile(
-                P, I, J, type_idx, num, den
-            )
+            MaxEntTypesObs._accumulate_type_blocks_tile(P, I, J, type_idx, num, den)
 
-        # finalize: means per block
         with np.errstate(invalid="ignore", divide="ignore"):
             out = np.divide(num, den, out=np.zeros_like(num), where=(den > 0))
 
         if return_symmetric:
-            # mirror upper to lower explicitly for safety
             iu, ju = np.triu_indices(n_types, k=1)
             out[ju, iu] = out[iu, ju]
-
         return out
 
     @staticmethod
@@ -634,19 +620,20 @@ class MaxEntTypesObs:
             )
         return out
 
+    # -------------------- EXPERIMENT: POST-KR (as before) --------------------
+
     @staticmethod
     def exp_type_type_block_means_from_KR(
         C_KR,                              # (N,N) dense ndarray OR array-like supporting slicing
         monomer_types: np.ndarray,         # (N,)
         n_types: int = 5,
-        mode: str = "binary",              # 'binary' or 'soft' (soft via scaler)
+        mode: str = "binary",              # 'binary' or 'soft'
         p_min: float = 1.0,                # used only if mode == 'soft' and soft_scaler provided
         band_width: int = 0,
         tile_size: int = 4096,
         return_symmetric: bool = True,
         dtype = np.float64,
         soft_scaler: Optional[callable] = None,
-        # soft_scaler: Callable[[np.ndarray], np.ndarray], maps a VALUE tile to [0,1] tile
     ) -> np.ndarray:
         """
         Compute experimental observable from a KR-balanced map using the same
@@ -676,7 +663,6 @@ class MaxEntTypesObs:
         for I, J in MaxEntTypesObs._tile_pairs(N, tile_size):
             V = np.array(C_KR[I, J], dtype=dtype, copy=False)
 
-            # exclude diagonal within the tile if I == J
             if I.start == J.start and I.stop == J.stop:
                 np.fill_diagonal(V, 0.0)
 
@@ -695,13 +681,10 @@ class MaxEntTypesObs:
             else:
                 raise ValueError("mode must be 'binary' or 'soft'")
 
-            # genomic neighbor removal
             if band_width > 0:
                 MaxEntTypesObs._apply_band_mask_inplace(P, I, J, band_width)
 
-            MaxEntTypesObs._accumulate_type_blocks_tile(
-                P, I, J, type_idx, num, den
-            )
+            MaxEntTypesObs._accumulate_type_blocks_tile(P, I, J, type_idx, num, den)
 
         with np.errstate(invalid="ignore", divide="ignore"):
             out = np.divide(num, den, out=np.zeros_like(num), where=(den > 0))
@@ -709,10 +692,145 @@ class MaxEntTypesObs:
         if return_symmetric:
             iu, ju = np.triu_indices(n_types, k=1)
             out[ju, iu] = out[iu, ju]
-
         return out
 
-    # --------------- helpers (stateless) -----------------
+    # -------------------- NEW: EXPERIMENT FROM RAW COUNTS (runs KR internally) --------------------
+
+    @staticmethod
+    def kr_vector_from_counts(
+        counts: np.ndarray,
+        rescale: bool = True,
+        verbose: bool = False,
+        dtype = np.float64,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Run KR on a raw Hi-C counts matrix (dense), return the KR vector d for
+        valid bins and the valid_indices used.
+
+        Returns
+        -------
+        d_valid : (N_valid,) float64 normalization vector
+        valid_indices : (N_valid,) int64 indices retained (non-zero rows/cols)
+        """
+        from scipy.sparse import csr_matrix
+        from krbalancing import kr_balancing
+
+        counts = np.asarray(counts, dtype=dtype)
+        N = counts.shape[0]
+        if verbose:
+            print("Starting KR balancing...")
+            print(f"Input matrix shape: {counts.shape}")
+
+        # valid bins: non-zero rows AND non-zero cols
+        row_nz = np.where(counts.sum(axis=1).reshape(-1) > 0)[0]
+        col_nz = np.where(counts.sum(axis=0).reshape(-1) > 0)[0]
+        valid_indices = np.intersect1d(row_nz, col_nz)
+        if verbose:
+            print(f"Valid bins: {len(valid_indices)} / {N}")
+        if valid_indices.size == 0:
+            raise ValueError("No valid bins found for KR.")
+
+        sub = counts[np.ix_(valid_indices, valid_indices)].astype(dtype, copy=False)
+        A = csr_matrix(sub)  # weighted symmetric; KR expects CSR
+
+        kr = kr_balancing(
+            A.shape[0], A.shape[1], A.nnz,
+            A.indptr.astype(np.int64, copy=False),
+            A.indices.astype(np.int64, copy=False),
+            A.data.astype(dtype, copy=False),
+        )
+        if verbose:
+            print("Computing KR...")
+        kr.computeKR()
+        d_valid = np.array(kr.get_normalisation_vector(bool(rescale)).todense(), dtype=dtype).ravel()
+        if verbose:
+            print("KR balancing completed.")
+        return d_valid, valid_indices
+
+    @staticmethod
+    def exp_type_type_block_means_from_raw_counts(
+        counts: np.ndarray,               # (N,N) raw counts, symmetric, dense
+        monomer_types: np.ndarray,        # (N,)
+        n_types: int = 5,
+        mode: str = "binary",             # 'binary' or 'soft'
+        p_min: float = 1.0,               # soft only (after scaling)
+        band_width: int = 0,
+        tile_size: int = 4096,
+        return_symmetric: bool = True,
+        dtype = np.float64,
+        rescale: bool = True,
+        verbose: bool = False,
+        soft_scaler: Optional[callable] = None,  # maps balanced values -> [0,1]
+    ) -> np.ndarray:
+        """
+        Full experimental pipeline from RAW counts:
+          1) Identify valid bins (non-zero rows/cols), subset counts and types.
+          2) KR on the sparse weighted matrix -> d.
+          3) Tile over (I,J): balanced_tile = counts[I,J] * d[I] * d[J].
+          4) Build P per mode (binary or soft) with diagonal + band removal.
+          5) Accumulate type–type block means (unordered pairs for A==B).
+        """
+        counts = np.asarray(counts, dtype=dtype)
+        N = counts.shape[0]
+
+        # 1) KR vector on valid bins; subset counts/types to valid domain
+        d_valid, valid = MaxEntTypesObs.kr_vector_from_counts(
+            counts, rescale=rescale, verbose=verbose, dtype=dtype
+        )
+        sub_types = np.asarray(monomer_types)[valid]
+        Nv = valid.size
+        type_idx = MaxEntTypesObs._prepare_type_indices(sub_types, n_types)
+
+        num = np.zeros((n_types, n_types), dtype=dtype)
+        den = np.zeros((n_types, n_types), dtype=dtype)
+
+        # 2–5) Tile over the VALID domain; compute balanced values on the fly
+        for I, J in MaxEntTypesObs._tile_pairs(Nv, tile_size):
+            # extract raw counts tile from original matrix using valid remap
+            Iglob = slice(valid[I.start], valid[I.stop])
+            Jglob = slice(valid[J.start], valid[J.stop])
+            V = counts[Iglob, Jglob].astype(dtype, copy=False)
+
+            # balanced tile: D * A * D (elementwise for off-diagonal entries)
+            dI = d_valid[I.start:I.stop][:, None]
+            dJ = d_valid[J.start:J.stop][None, :]
+            V_bal = V * dI * dJ
+
+            # exclude diagonal within tile if I==J
+            if I.start == J.start and I.stop == J.stop:
+                np.fill_diagonal(V_bal, 0.0)
+
+            # build P from balanced values
+            if mode == "binary":
+                P = (V_bal > 0.0).astype(dtype, copy=False)
+            elif mode == "soft":
+                if soft_scaler is None:
+                    raise NotImplementedError(
+                        "Experimental soft mode requires 'soft_scaler' to map balanced values -> [0,1]."
+                    )
+                P = np.asarray(soft_scaler(V_bal), dtype=dtype)
+                if p_min < 1.0:
+                    P[P < p_min] = 0.0
+                if I.start == J.start and I.stop == J.stop:
+                    np.fill_diagonal(P, 0.0)
+            else:
+                raise ValueError("mode must be 'binary' or 'soft'")
+
+            # genomic neighbor removal in VALID coordinates
+            if band_width > 0:
+                MaxEntTypesObs._apply_band_mask_inplace(P, I, J, band_width)
+
+            MaxEntTypesObs._accumulate_type_blocks_tile(P, I, J, type_idx, num, den)
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.divide(num, den, out=np.zeros_like(num), where=(den > 0))
+
+        if return_symmetric:
+            iu, ju = np.triu_indices(n_types, k=1)
+            out[ju, iu] = out[iu, ju]
+        return out
+
+    # -------------------- helpers --------------------
 
     @staticmethod
     def _prepare_type_indices(monomer_types: np.ndarray, n_types: int) -> List[np.ndarray]:
@@ -721,10 +839,6 @@ class MaxEntTypesObs:
         Returns sorted index arrays per type for fast slicing.
         """
         mt = np.asarray(monomer_types)
-        # If labels are not 0..n_types-1, remap to contiguous 0..(n_types-1)
-        # Here we assume they're already 0..n_types-1 per your pipeline; otherwise:
-        # uniq = np.unique(mt); mapping = {val:i for i,val in enumerate(uniq)}
-        # mt = np.vectorize(mapping.get, otypes=[int])(mt)
         idx_by_type = []
         for t in range(n_types):
             idx = np.flatnonzero(mt == t)
@@ -753,67 +867,48 @@ class MaxEntTypesObs:
         """
         if band_width <= 0:
             return
-        # build global index grids cheaply from slice bounds
         rows = np.arange(I.start, I.stop)[:, None]
         cols = np.arange(J.start, J.stop)[None, :]
-        mask = (np.abs(rows - cols) <= band_width)
-        # For large tiles, ensure boolean mask is not copied excessively
-        P_tile[mask] = 0.0
+        P_tile[np.abs(rows - cols) <= band_width] = 0.0
 
     @staticmethod
     def _accumulate_type_blocks_tile(
-        P: np.ndarray,                # tile values already built, diagonal/band handled
-        I: slice, J: slice,           # bead index slices for this tile
+        P: np.ndarray,
+        I: slice, J: slice,
         idx_by_type: List[np.ndarray],
-        num: np.ndarray,              # (T,T) numerator accumulator
-        den: np.ndarray,              # (T,T) denominator accumulator
+        num: np.ndarray,
+        den: np.ndarray,
     ) -> None:
         """
         Add tile contributions into (num, den) for each type block.
         Handles (A!=B), (A==B and I!=J), and (A==B and I==J with i<j).
         """
-        # local bead indices for the tile
-        I_idx = np.arange(I.start, I.stop, dtype=np.int64)
-        J_idx = np.arange(J.start, J.stop, dtype=np.int64)
-
-        # quick map from global -> local within the tile via searchsorted on contiguous ranges
-        # For contiguous slices, the local index is just -I.start or -J.start.
-        # We'll build masks via intersection using searchsorted (fast on sorted arrays).
         same_tile = (I.start == J.start and I.stop == J.stop)
-
         T = num.shape[0]
+
         for A in range(T):
-            # intersect type A with I
-            I_A_local = MaxEntTypesObs._intersect_contiguous(idx_by_type[A], I.start, I.stop)
-            if I_A_local.size == 0:
+            I_A = MaxEntTypesObs._intersect_contiguous(idx_by_type[A], I.start, I.stop)
+            if I_A.size == 0:
                 continue
             for B in range(A, T):
-                J_B_local = MaxEntTypesObs._intersect_contiguous(idx_by_type[B], J.start, J.stop)
-                if J_B_local.size == 0:
+                J_B = MaxEntTypesObs._intersect_contiguous(idx_by_type[B], J.start, J.stop)
+                if J_B.size == 0:
                     continue
-
                 if A != B:
-                    # rectangle A x B (count once)
-                    block_sum = P[np.ix_(I_A_local, J_B_local)].sum(dtype=num.dtype)
+                    block_sum = P[np.ix_(I_A, J_B)].sum(dtype=num.dtype)
                     num[A, B] += block_sum
-                    den[A, B] += (I_A_local.size * J_B_local.size)
+                    den[A, B] += (I_A.size * J_B.size)
                 else:
-                    # A == B
                     if not same_tile:
-                        # two disjoint slices: full rectangle, counted once
-                        block_sum = P[np.ix_(I_A_local, J_B_local)].sum(dtype=num.dtype)
+                        block_sum = P[np.ix_(I_A, J_B)].sum(dtype=num.dtype)
                         num[A, B] += block_sum
-                        den[A, B] += (I_A_local.size * J_B_local.size)
+                        den[A, B] += (I_A.size * J_B.size)
                     else:
-                        # same slice/tile: need unordered pairs i<j within A-subset
-                        if I_A_local.size >= 2:
-                            # sum over upper triangle of the sub-block efficiently
-                            sub = P[np.ix_(I_A_local, I_A_local)]
-                            # use k=1 to exclude diagonal
-                            iu, ju = np.triu_indices(I_A_local.size, k=1)
+                        if I_A.size >= 2:
+                            sub = P[np.ix_(I_A, I_A)]
+                            iu, ju = np.triu_indices(I_A.size, k=1)
                             num[A, B] += sub[iu, ju].sum(dtype=num.dtype)
-                            # denominator: C(n,2)
-                            den[A, B] += (I_A_local.size * (I_A_local.size - 1) // 2)
+                            den[A, B] += (I_A.size * (I_A.size - 1) // 2)
 
     @staticmethod
     def _intersect_contiguous(indexes_of_type: np.ndarray, start: int, stop: int) -> np.ndarray:
@@ -821,10 +916,9 @@ class MaxEntTypesObs:
         Intersect a sorted array of indices with a contiguous slice [start:stop),
         and return LOCAL positions within that slice (0..len-1).
         """
-        # Find global indices in [start, stop)
         lo = np.searchsorted(indexes_of_type, start, side='left')
         hi = np.searchsorted(indexes_of_type, stop, side='left')
         if hi <= lo:
             return np.empty(0, dtype=np.int64)
-        # Convert to local (subtract slice start)
         return (indexes_of_type[lo:hi] - start).astype(np.int64)
+
