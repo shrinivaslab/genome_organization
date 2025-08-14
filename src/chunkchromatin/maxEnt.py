@@ -778,10 +778,12 @@ class MaxEntTypesObs:
 
         # 3–5) Tiled over valid coordinates
         for I, J in self._tile_pairs(Nv, tile_size):
-            # map valid coords -> global slices
-            Iglob = slice(valid[I.start], valid[I.stop])
-            Jglob = slice(valid[J.start], valid[J.stop])
-            V = counts[Iglob, Jglob].astype(dtype, copy=False)
+            # map valid coords -> arrays of global indices
+            row_idx = valid[I.start:I.stop]
+            col_idx = valid[J.start:J.stop]
+
+            # slice counts with fancy indexing (handles non‑contiguity safely)
+            V = counts[np.ix_(row_idx, col_idx)].astype(dtype, copy=False)
 
             # balance on the fly: d[I] * counts * d[J]
             dI = d_valid[I.start:I.stop][:, None]

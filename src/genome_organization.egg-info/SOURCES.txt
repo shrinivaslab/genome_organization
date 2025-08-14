@@ -1,9 +1,12 @@
 README.md
 pyproject.toml
 setup.py
+src/chunkchromatin/binaryReporter.py
 src/chunkchromatin/chromosome.py
+src/chunkchromatin/condensate.py
 src/chunkchromatin/hdf5_format.py
 src/chunkchromatin/lamina.py
+src/chunkchromatin/maxEnt.py
 src/chunkchromatin/simulation.py
 src/genome_organization.egg-info/PKG-INFO
 src/genome_organization.egg-info/SOURCES.txt
@@ -64,4 +67,3 @@ src/utilis/__init__.py
 src/utilis/contact_map_consensus.py
 src/utilis/domain_visualization.py
 src/utilis/polychrom_hp_functions.py
-src/utilis/simulation_accessory.py
