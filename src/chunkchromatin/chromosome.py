@@ -360,6 +360,81 @@ class Chromosome(object):
             force.addParticle([float(t)])
 
         return force
+    
+
+    def add_tanh_type_force(
+            self, 
+            sim_object, 
+            interaction_matrix, 
+            monomer_types,
+            mu=4.22,
+            rc=1.82,
+            rCutoff=3.0,
+            name="tanh_type_force"
+        ):
+        """
+        OpenMiChroM-style type–type interaction using the tanh distance kernel.
+
+        Pair energy:
+            U_ij = lambda_tanh * f(r; mu, rc) * alpha_{type_i, type_j}
+
+        with f(r; mu, rc) = 0.5 * (1 + tanh(mu * (rc - r))).
+
+        Notes
+        -----
+        - Negative alpha values are attractive by convention.
+        """
+
+        # Validate inputs
+        Ntypes = int(np.max(monomer_types)) + 1
+        if interaction_matrix.shape[0] < Ntypes or interaction_matrix.shape[1] < Ntypes:
+            raise ValueError(f"Interaction matrix must cover all {Ntypes} types.")
+        if not np.allclose(interaction_matrix.T, interaction_matrix):
+            raise ValueError("Interaction matrix must be symmetric.")
+
+        # Collect nonzero type pairs
+        indexpairs = [(i, j) for i in range(Ntypes) for j in range(Ntypes)
+                    if float(interaction_matrix[i, j]) != 0.0]
+
+        # Build mixing term via Kronecker deltas on per-particle 'type'
+        if indexpairs:
+            mix_terms = [f"delta(type1-{i})*delta(type2-{j})*ALPHA_{i}_{j}" for (i, j) in indexpairs]
+            mixing = "(" + "+".join(mix_terms) + ")"
+        else:
+            mixing = "0"
+
+        # Energy expression: no step() gating
+        energy = (
+            "lambda_tanh * f * MIX;"
+            "f = 0.5 * (1 + tanh(mu * (rc - r)));"
+            f"MIX = {mixing};"
+        )
+
+        # Define force
+        force = mm.CustomNonbondedForce(energy)
+        force.name = name
+        force.setCutoffDistance(rCutoff * sim_object.conlen)
+        force.setNonbondedMethod(mm.CustomNonbondedForce.CutoffNonPeriodic)
+        force.setForceGroup(2)  # match your other custom nonbonded force group
+
+        # Global parameters
+        self._add_global_parameter(force, "lambda_tanh", 1.0)
+        self._add_global_parameter(force, "mu", float(mu))
+        self._add_global_parameter(force, "rc", float(rc))
+        self._add_global_parameter(force, "rcutoff", rCutoff)
+
+        # Alpha parameters per interacting type pair
+        for (i, j) in indexpairs:
+            self._add_global_parameter(force, f"ALPHA_{i}_{j}", float(interaction_matrix[i, j]))
+
+        # Per-particle 'type' parameter
+        force.addPerParticleParameter("type")
+        for t in monomer_types:
+            force.addParticle([float(t)])
+
+        return force
+
+
 
 
     @staticmethod
