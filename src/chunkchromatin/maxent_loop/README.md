@@ -30,7 +30,7 @@ This package orchestrates a Maximum Entropy fitting loop over chromatin type–t
 From a login node on your cluster:
 
 ```bash
-python /mnt/data/maxent_loop/bin/maxent_loop.py   --run-root /gpfs/home/USER/maxent_runs/run_001   --initial-epsilon /gpfs/home/USER/maxent_inputs/epsilon_init.npy   --name run_001
+python /maxent_loop/bin/maxent_loop.py   --run-root /gpfs/home/USER/maxent_runs/run_001   --initial-epsilon /gpfs/home/USER/maxent_inputs/epsilon_init.npy   --name run_001
 ```
 
 This will create the run folder, seed schedule, and submit **iteration 000**. Each iteration submits:
