@@ -7,6 +7,7 @@
 #SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
 {constraint_line}{qos_line}
+{array_line}
 #SBATCH --output={log_dir}/proc_%j.out
 #SBATCH --error={log_dir}/proc_%j.err
 
@@ -27,6 +28,9 @@ export MAXENT_TARGETS_NPY="{targets_npy}"
 export MAXENT_OBS_DIR="{obs_dir}"
 export MAXENT_N_TYPES="{n_types}"
 
-echo "[proc] $(date) processing observables for {iter_dir}"
+# Optional: if processing is arrayed, this gives you a shard index
+export MAXENT_PROCESS_INDEX="${SLURM_ARRAY_TASK_ID:-0}"
+
+echo "[proc] $(date) processing observables for {iter_dir} (shard ${MAXENT_PROCESS_INDEX})"
 python "{submit_process_obs}" || exit $?
 echo "[proc] $(date) finished processing"

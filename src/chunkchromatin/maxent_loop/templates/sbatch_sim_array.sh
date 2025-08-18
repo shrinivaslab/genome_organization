@@ -29,15 +29,25 @@ export MAXENT_TARGETS_NPY="{targets_npy}"
 export MAXENT_OBS_DIR="{obs_dir}"
 export MAXENT_N_TYPES="{n_types}"
 
-REPL_ID="${{SLURM_ARRAY_TASK_ID}}"
+# Compute replicate range for this array task
+TASK_ID="${SLURM_ARRAY_TASK_ID}"
+PER_TASK="{per_task_reps}"
+TOTAL_REPS="{n_reps}"
+START=$(( TASK_ID * PER_TASK ))
+END=$(( START + PER_TASK - 1 ))
+if [ "$END" -ge "$TOTAL_REPS" ]; then END=$(( TOTAL_REPS - 1 )); fi
 
-# Optional per-replicate output dir (runner may or may not use it)
-export MAXENT_REPLICATE_OUTDIR="{iter_dir}/sims/replicate_${{REPL_ID}}"
-mkdir -p "${{MAXENT_REPLICATE_OUTDIR}}"
+echo "[sim] $(date) task ${TASK_ID} will run replicates ${START}..${END}"
 
-echo "[sim] $(date) starting replicate ${REPL_ID} in {iter_dir}"
+# Optional per-replicate outdir base
+export MAXENT_REPL_OUT_BASE="{iter_dir}/sims"
+mkdir -p "${MAXENT_REPL_OUT_BASE}"
 
-python "{run_replicates_array}" || exit $?
-touch "${{MAXENT_REPLICATE_OUTDIR}}/status.ok"
+# series runner calls your existing runner for each replicate
+export MAXENT_ARRAY_SERIES_RANGE="${START}-${END}"
 
-echo "[sim] $(date) finished replicate ${REPL_ID}"
+# For each sub-run we set MAXENT_REPLICATE_OUTDIR and SLURM_ARRAY_TASK_ID=r inside series_runner
+python "{series_runner}" \
+  --runner "{run_replicates_array}" \
+  --start "${START}" \
+  --end   "${END}"
