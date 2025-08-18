@@ -1,0 +1,49 @@
+# MaxEnt loop configuration
+# Edit values as needed, but do not change keys.
+# Paths can be absolute or relative to the run_root you pass to maxent_loop.py.
+
+# SLURM settings
+slurm:
+  account: "p32733"
+  partition: "short"
+  time_limit: "4:00:00"
+  cpus_per_task: 7
+  mem: "25G"
+  # Optional: set to a node feature or constraint if relevant
+  constraint: null
+  qos: null
+
+# Simulation settings
+simulation:
+  n_replicates: 50
+  frames: 4000
+  burnin_frames: 400        # Cold start: discard first X frames in analysis
+  save_frames: true         # If your runner supports streaming-only, set false to minimize I/O
+  seeds_base: 177013        # Deterministically derive 50 seeds from this base
+  n_types: 5                # K. Ensure this matches your system
+
+# Learning-rate & update
+update:
+  eta_init: 1.0e-3          # starting scalar step size for iteration 0
+  eta_min: 1.0e-6
+  eta_max: 5.0e-1
+  precond_eps: 1.0e-8       # numerical floor added to diagonal covariance
+  bb_clip_fraction: 0.25    # fractional clip on proposed BB step relative to eta_max
+
+# Convergence (stop if true for 2 consecutive iterations by default)
+convergence:
+  max_abs_residual: 1.0e-3
+  l2_residual: 5.0e-3
+  max_param_step: 1.0e-4
+  consecutive: 2
+
+# Paths to your project scripts. Adjust if they live elsewhere on the cluster.
+paths:
+  run_replicates_array: "/mnt/data/run_replicates_array.py"
+  submit_process_obs:   "/mnt/data/submit_process_obs.py"
+
+# Pinned kernel and experimental target vector (place your files here or point elsewhere)
+exp_targets:
+  kernel_json: "/mnt/data/maxent_loop/exp_targets/kernel.json"
+  T_type_kl_npy: "/mnt/data/maxent_loop/exp_targets/T_type_kl.npy"
+
