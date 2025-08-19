@@ -15,7 +15,7 @@ set -euo pipefail
 
 module purge || true
 # If needed:
-# eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
+eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
 
 # Canonical env exported for your script (and future use)
 export MAXENT_ITER_DIR="{iter_dir}"

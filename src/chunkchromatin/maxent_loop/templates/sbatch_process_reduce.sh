@@ -13,7 +13,7 @@
 set -euo pipefail
 
 module purge || true
-# eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
+eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
 
 export MAXENT_ITER_DIR="{iter_dir}"
 export MAXENT_OBS_DIR="{obs_dir}"

@@ -16,6 +16,7 @@ set -euo pipefail
 module purge || true
 # load your environment here if needed, e.g.:
 # module load anaconda && source activate your_env
+eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
 
 export MAXENT_ITER_DIR="{iter_dir}"
 export MAXENT_EPS_PATH="{eps_path}"

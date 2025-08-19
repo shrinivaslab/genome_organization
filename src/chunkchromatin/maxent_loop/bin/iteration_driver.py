@@ -1,6 +1,7 @@
+#!/usr/bin/env python3
 import argparse, os, json, shutil
 from pathlib import Path
-from utils import ensure_dir, load_config, write_json, sbatch_submit, format_iter, make_executable
+from chunkchromatin.maxent_loop.utils import ensure_dir, load_config, write_json, sbatch_submit, format_iter, make_executable
 
 def main():
     ap = argparse.ArgumentParser()

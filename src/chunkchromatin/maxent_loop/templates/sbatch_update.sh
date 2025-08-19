@@ -14,6 +14,7 @@ set -euo pipefail
 
 module purge || true
 # load your environment here if needed
+eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
 
 echo "[update] $(date) running update step for {iter_dir}"
 python "{update_step}" --run-root "{run_root}" --iter "{iter_idx}" --config "{config_yaml}"
