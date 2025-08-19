@@ -4,7 +4,7 @@
 #SBATCH --account={account}
 #SBATCH --partition={partition}
 #SBATCH --time={time_limit}
-#SBATCH --cpus-per-task={cpus}
+#SBATCH --cpus-per-task={cpus_per_task}
 #SBATCH --mem={mem}
 {constraint_line}{qos_line}
 #SBATCH --array=0-{array_max}
@@ -23,7 +23,7 @@ export MAXENT_OBS_DIR="{obs_dir}"
 export MAXENT_N_REPLICATES="{n_reps}"
 export MAXENT_PROCESS_INDEX="${{SLURM_ARRAY_TASK_ID}}"
 export MAXENT_PROCESS_COUNT="${{SLURM_ARRAY_TASK_COUNT}}"
-export MAXENT_WORKERS="{cpus}"
+export MAXENT_WORKERS="{workers}"
 export MAXENT_IO_K="{io_k}"
 
 # Threads pinning
@@ -33,7 +33,7 @@ export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
 # Resolve inputs
-replicate_root="{iter_dir}/sims"
+replicate_root="{replicate_root}"
 output_dir="{obs_dir}"
 monomer_types="{monomer_types}"
 exp_tkl="{exp_tkl}"
@@ -44,13 +44,13 @@ kernel_cli="{kernel_cli}"
 echo "[proc:worker] $(date) shard ${{MAXENT_PROCESS_INDEX}}/${{MAXENT_PROCESS_COUNT}} :: io_k={io_k}"
 
 python "{process_tkl_update}" worker \
-  --replicate-root "${replicate_root}" \
-  --output-dir     "${output_dir}" \
-  --monomer-types  "${monomer_types}" \
-  --exp-tkl        "${exp_tkl}" \
+  --replicate-root "${{replicate_root}}" \
+  --output-dir     "${{output_dir}}" \
+  --monomer-types  "${{monomer_types}}" \
+  --exp-tkl        "${{exp_tkl}}" \
   --array-index    "${{MAXENT_PROCESS_INDEX}}" \
   --array-count    "${{MAXENT_PROCESS_COUNT}}" \
-  --n-total-reps   "${MAXENT_N_REPLICATES}" \
-  --workers        "${MAXENT_WORKERS}" \
+  --n-total-reps   "${{MAXENT_N_REPLICATES}}" \
+  --workers        "${{MAXENT_WORKERS}}" \
   --io-k           "{io_k}" \
-  ${kernel_cli}
+  ${{kernel_cli}}

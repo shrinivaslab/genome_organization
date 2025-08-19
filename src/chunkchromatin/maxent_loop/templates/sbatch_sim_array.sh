@@ -4,7 +4,7 @@
 #SBATCH --account={account}
 #SBATCH --partition={partition}
 #SBATCH --time={time_limit}
-#SBATCH --cpus-per-task={cpus}
+#SBATCH --cpus-per-task={cpus_per_task}
 #SBATCH --mem={mem}
 #SBATCH --array=0-{array_max}
 {constraint_line}{qos_line}
