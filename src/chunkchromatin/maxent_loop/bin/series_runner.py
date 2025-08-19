@@ -24,7 +24,7 @@ def main():
         env["SLURM_ARRAY_TASK_ID"] = str(r)
         env["MAXENT_REPLICATE_ID"] = str(r)  # also provide explicit ID
         print(f"[series_runner] launching replicate {r} with {runner}", flush=True)
-        proc = subprocess.run([sys.executable, runner], env=env)
+        proc = subprocess.run([sys.executable, runner, "--replicate_id", str(r)], env=env)
         if proc.returncode != 0:
             raise SystemExit(proc.returncode)
         # Optional: mark success under per-replicate outdir if the runner didn't already
