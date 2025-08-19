@@ -19,10 +19,10 @@ export MAXENT_ITER_DIR="{iter_dir}"
 export MAXENT_OBS_DIR="{obs_dir}"
 
 output_dir="{obs_dir}"
-alpha_dir="{alpha_dir}"
+epsilon_dir="{epsilon_dir}"
 
 echo "[proc:reduce] $(date) reducing shards for {iter_dir}"
 python "{process_tkl_update}" reduce \
   --output-dir "${{output_dir}}" \
-  --alpha-dir  "${{alpha_dir}}"
+  --epsilon-dir  "${{epsilon_dir}}"
 echo "[proc:reduce] $(date) done"

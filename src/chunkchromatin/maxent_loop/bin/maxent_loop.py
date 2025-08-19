@@ -29,63 +29,63 @@ def main():
             if not (iter_dir / "update").exists():
                 ensure_dir(iter_dir / "update")
             
-            # Check alpha file situation for any iteration
+            # Check epsilon file situation for any iteration
             update_dir = iter_dir / "update"
-            existing_alphas = list(update_dir.glob("alpha_tk_*.npy"))
+            existing_epsilons = list(update_dir.glob("epsilon_tk_*.npy"))
             
-            if len(existing_alphas) == 0:
-                # No alpha files exist - need to create the appropriate one
+            if len(existing_epsilons) == 0:
+                # No epsilon files exist - need to create the appropriate one
                 if args.resume_iter == 0:
-                    # For iteration 0, create alpha_tk_0.npy from initial epsilon
-                    alpha_path = update_dir / "alpha_tk_0.npy"
+                    # For iteration 0, create epsilon_tk_0.npy from initial epsilon
+                    epsilon_path = update_dir / "epsilon_tk_0.npy"
                     eps_path = iter_dir / "params" / "epsilon.npy"
                     if eps_path.exists():
-                        shutil.copy2(eps_path, alpha_path)
-                        print(f"Created {alpha_path} from {eps_path}")
+                        shutil.copy2(eps_path, epsilon_path)
+                        print(f"Created {epsilon_path} from {eps_path}")
                     else:
                         eps0_src = Path(args.initial_epsilon).resolve()
-                        shutil.copy2(eps0_src, alpha_path)
-                        print(f"Created {alpha_path} from {eps0_src}")
+                        shutil.copy2(eps0_src, epsilon_path)
+                        print(f"Created {epsilon_path} from {eps0_src}")
                 else:
                     # For later iterations, should copy from previous iteration
                     prev_iter = args.resume_iter - 1
                     prev_iter_dir = run_root / format_iter(prev_iter)
                     prev_update_dir = prev_iter_dir / "update"
                     
-                    # Find the latest alpha file from previous iteration
-                    prev_alphas = list(prev_update_dir.glob("alpha_tk_*.npy"))
-                    if prev_alphas:
-                        # Find the highest numbered alpha file
+                    # Find the latest epsilon file from previous iteration
+                    prev_epsilons = list(prev_update_dir.glob("epsilon_tk_*.npy"))
+                    if prev_epsilons:
+                        # Find the highest numbered epsilon file
                         import re
                         max_n = -1
-                        latest_alpha = None
-                        for alpha_file in prev_alphas:
-                            m = re.match(r"alpha_tk_(\d+)\.npy", alpha_file.name)
+                        latest_epsilon = None
+                        for epsilon_file in prev_epsilons:
+                            m = re.match(r"epsilon_tk_(\d+)\.npy", epsilon_file.name)
                             if m:
                                 n = int(m.group(1))
                                 if n > max_n:
                                     max_n = n
-                                    latest_alpha = alpha_file
+                                    latest_epsilon = epsilon_file
                         
-                        if latest_alpha:
-                            # Copy as alpha_tk_{max_n}.npy (same number as source)
-                            alpha_path = update_dir / latest_alpha.name
-                            shutil.copy2(latest_alpha, alpha_path)
-                            print(f"Copied {latest_alpha} to {alpha_path}")
+                        if latest_epsilon:
+                            # Copy as epsilon_tk_{max_n}.npy (same number as source)
+                            epsilon_path = update_dir / latest_epsilon.name
+                            shutil.copy2(latest_epsilon, epsilon_path)
+                            print(f"Copied {latest_epsilon} to {epsilon_path}")
                         else:
-                            print(f"ERROR: Could not find valid alpha files in {prev_update_dir}")
+                            print(f"ERROR: Could not find valid epsilon files in {prev_update_dir}")
                             return
                     else:
-                        print(f"ERROR: No alpha files found in previous iteration {prev_update_dir}")
+                        print(f"ERROR: No epsilon files found in previous iteration {prev_update_dir}")
                         return
-            elif len(existing_alphas) == 1:
-                # Exactly one alpha file exists - should be fine
-                print(f"Found existing alpha file: {existing_alphas[0].name}")
+            elif len(existing_epsilons) == 1:
+                # Exactly one epsilon file exists - should be fine
+                print(f"Found existing epsilon file: {existing_epsilons[0].name}")
             else:
-                # Multiple alpha files - warn user but continue (might be expected)
-                print("Found multiple alpha files:")
-                for alpha_file in existing_alphas:
-                    print(f"  - {alpha_file.name}")
+                # Multiple epsilon files - warn user but continue (might be expected)
+                print("Found multiple epsilon files:")
+                for epsilon_file in existing_epsilons:
+                    print(f"  - {epsilon_file.name}")
                 print("The process reduce step will use the highest numbered file.")
                 print("If this is not intended, please clean up manually before resuming.")
             
@@ -96,7 +96,7 @@ def main():
             reduce_cmd = [
                 "python", str(proj_root / "bin" / "process_tkl_update.py"), "reduce",
                 "--output-dir", str(iter_dir / "obs"),
-                "--alpha-dir", str(iter_dir / "update")
+                "--epsilon-dir", str(iter_dir / "update")
             ]
             print("Running:", " ".join(reduce_cmd))
             result = subprocess.run(reduce_cmd, capture_output=True, text=True)
@@ -109,27 +109,11 @@ def main():
             
             print("Process reduce step completed successfully!")
             print("STDOUT:", result.stdout)
-            
-            # Run update step directly (no SLURM)
-            print("Now running update step directly...")
-            update_cmd = [
-                "python", str(proj_root / "bin" / "update_step.py"),
-                "--run-root", str(run_root),
-                "--iter", str(args.resume_iter),
-                "--config", str(Path(args.config).resolve())
-            ]
-            print("Running:", " ".join(update_cmd))
-            result = subprocess.run(update_cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print("Update step failed:")
-                print("STDOUT:", result.stdout)
-                print("STDERR:", result.stderr)
-                return
-            
-            print("Update step completed successfully!")
-            print("STDOUT:", result.stdout)
-            print("The iteration loop should now continue normally.")
+            print("\nParameter update completed.")
+            print("The Newton update produces both epsilon_tk_*.npy and epsilon_next.npy files.")
+            print("This unified system maintains only epsilon parameters throughout the pipeline.")
+            print("\nTo continue the full iteration loop, you need to run the normal iteration driver")
+            print("which will handle copying epsilon_next.npy to the next iteration's epsilon.npy.")
             return
         elif args.resume_step == "update":
             # Special handling for update step resume
@@ -213,15 +197,14 @@ def main():
     ensure_dir(iter0 / "obs")
     ensure_dir(iter0 / "update")
 
-    # Copy initial epsilon
+    # Copy initial interaction matrix as epsilon
     eps0_src = Path(args.initial_epsilon).resolve()
     eps0_dst = iter0 / "params" / "epsilon.npy"
     shutil.copy2(eps0_src, eps0_dst)
     
-    # Also copy initial epsilon as alpha_tk_0.npy for the first update step
-    # This prevents FileNotFoundError in process_tkl_update.py reduce mode
-    alpha0_dst = iter0 / "update" / "alpha_tk_0.npy"
-    shutil.copy2(eps0_src, alpha0_dst)
+    # Also copy as epsilon_tk_0.npy for the Newton update versioning
+    epsilon0_dst = iter0 / "update" / "epsilon_tk_0.npy"
+    shutil.copy2(eps0_src, epsilon0_dst)
 
     # Submit iteration 0 driver
     driver = Path(__file__).resolve().parent / "iteration_driver.py"
