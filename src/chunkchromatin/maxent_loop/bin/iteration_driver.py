@@ -114,7 +114,7 @@ def main():
     # PROCESSING REDUCE (single job) using process_tkl_update.py reduce
     # ------------------------------------
     procr = cfg["resources"]["processing"]["reduce"]
-    alpha_dir = procr.get("alpha_dir") or str(iterd / "update")
+    epsilon_dir = procr.get("epsilon_dir") or str(iterd / "update")
     procr_tpl = (tpl_dir / "sbatch_process_reduce.sh")
     procr_text = procr_tpl.read_text().format(
         job_name=f"{args.name}_pred_{args.iter:03d}",
@@ -128,7 +128,7 @@ def main():
         log_dir=str(logd),
         iter_dir=str(iterd),
         obs_dir=str(iterd / "obs"),
-        alpha_dir=alpha_dir,
+        epsilon_dir=epsilon_dir,
         process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
     )
     procr_sbatch = iterd / "obs" / "submit_process_reduce.sh"

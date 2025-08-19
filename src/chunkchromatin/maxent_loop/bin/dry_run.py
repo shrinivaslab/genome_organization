@@ -475,7 +475,7 @@ else:
             'iter_dir': str(iter_dir),
             'obs_dir': str(iter_dir / "obs"),
             'replicate_root': str(iter_dir / "sims"),
-            'alpha_dir': str(iter_dir / "update"),
+            'epsilon_dir': str(iter_dir / "update"),
             
             # Simulation settings
             'eps_path': str(iter_dir / "params" / "epsilon.npy"),
@@ -649,7 +649,7 @@ Examples:
   
   # Test the exact command you plan to run on HPC
   python dry_run.py --run-root /gpfs/home/user/run_001 \\
-                     --initial-epsilon /path/to/alpha_tk_1.npy \\
+                     --initial-epsilon /path/to/epsilon_initial.npy \\
                      --name run001
         """
     )

@@ -54,5 +54,5 @@ This order must be consistent across your processor and `exp_targets/T_type_kl.n
 
 ### Reproducibility
 - Seeds are fixed across iterations (`seeds.json`) and mapped `replicate_id → seed` deterministically.
-- Full parameter history is stored under each `iter_XXX/params/epsilon.npy` and deltas in `iter_XXX/update/`.
+- Full parameter history is stored under each `iter_XXX/params/epsilon.npy` and versioned files in `iter_XXX/update/epsilon_tk_*.npy`. The interaction matrix is updated via Newton steps.
 

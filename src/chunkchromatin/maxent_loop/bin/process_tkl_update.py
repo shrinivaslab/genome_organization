@@ -273,13 +273,13 @@ def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types,
         print(f"[FAIL] {rep_str}: {e}")
 
 # ==========================
-# Reduce step: aggregate 50 reps and update alpha
+# Reduce step: aggregate 50 reps and update epsilon
 # ==========================
-def _find_latest_alpha(alpha_dir: Path, stem: str = "alpha_tk_", ext: str = ".npy") -> Path:
+def _find_latest_epsilon(epsilon_dir: Path, stem: str = "epsilon_tk_", ext: str = ".npy") -> Path:
     patt = re.compile(rf"^{re.escape(stem)}(\d+){re.escape(ext)}$")
     latest = None
     max_n = -1
-    for p in alpha_dir.glob(f"{stem}*{ext}"):
+    for p in epsilon_dir.glob(f"{stem}*{ext}"):
         m = patt.match(p.name)
         if m:
             n = int(m.group(1))
@@ -287,10 +287,10 @@ def _find_latest_alpha(alpha_dir: Path, stem: str = "alpha_tk_", ext: str = ".np
                 max_n = n
                 latest = p
     if latest is None:
-        raise FileNotFoundError(f"No prior alpha_tk_*.npy found in {alpha_dir}")
+        raise FileNotFoundError(f"No prior epsilon_tk_*.npy found in {epsilon_dir}")
     return latest
 
-def _next_version_path(dirpath: Path, stem: str = "alpha_tk_", ext: str = ".npy") -> Path:
+def _next_version_path(dirpath: Path, stem: str = "epsilon_tk_", ext: str = ".npy") -> Path:
     patt = re.compile(rf"^{re.escape(stem)}(\d+){re.escape(ext)}$")
     max_n = -1
     for p in dirpath.glob(f"{stem}*{ext}"):
@@ -299,10 +299,13 @@ def _next_version_path(dirpath: Path, stem: str = "alpha_tk_", ext: str = ".npy"
             max_n = max(max_n, int(m.group(1)))
     return dirpath / f"{stem}{max_n + 1}{ext}"
 
-def reduce_and_update(output_dir, alpha_dir, beta=BETA_DEFAULT):
+def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT):
     """
     Read all repXX_upper_grad_hess.npz in output_dir, average grad & Hess,
-    apply one damped Newton step, and save alpha_{n+1}.npy in alpha_dir.
+    apply one damped Newton step, and save epsilon_tk_{n+1}.npy in epsilon_dir.
+    
+    Also saves the result as epsilon_next.npy for use by the subsequent 
+    update_step.py in the pipeline.
     """
     files = sorted(glob.glob(os.path.join(output_dir, "rep??_upper_grad_hess.npz")))
     if len(files) == 0:
@@ -349,32 +352,38 @@ def reduce_and_update(output_dir, alpha_dir, beta=BETA_DEFAULT):
     delta_mat[iu] = delta_vec
     delta_mat = delta_mat + delta_mat.T - np.diag(np.diag(delta_mat))
 
-    alpha_dir = Path(alpha_dir)
-    alpha_dir.mkdir(parents=True, exist_ok=True)
-    alpha_old_path = _find_latest_alpha(alpha_dir)
-    alpha_old = np.load(alpha_old_path)
-    if alpha_old.shape != (K, K):
-        raise ValueError(f"alpha_old shape {alpha_old.shape} != ({K},{K})")
-    alpha_new = alpha_old + delta_mat
+    epsilon_dir = Path(epsilon_dir)
+    epsilon_dir.mkdir(parents=True, exist_ok=True)
+    epsilon_old_path = _find_latest_epsilon(epsilon_dir)
+    epsilon_old = np.load(epsilon_old_path)
+    if epsilon_old.shape != (K, K):
+        raise ValueError(f"epsilon_old shape {epsilon_old.shape} != ({K},{K})")
+    epsilon_new = epsilon_old + delta_mat
 
-    save_path = _next_version_path(alpha_dir)
-    np.save(save_path, alpha_new)
+    save_path = _next_version_path(epsilon_dir)
+    np.save(save_path, epsilon_new)
+
+    # Also save as epsilon_next.npy for the pipeline
+    epsilon_next_path = os.path.join(output_dir, "epsilon_next.npy")
+    np.save(epsilon_next_path, epsilon_new)
 
     meta = {
         "gamma": GAMMA,
         "lambda_reg": float(lambda_reg),
         "n_replicates": int(len(files)),
         "K": int(K),
-        "alpha_old_path": str(alpha_old_path),
-        "alpha_new_path": str(save_path),
+        "epsilon_old_path": str(epsilon_old_path),
+        "epsilon_new_path": str(save_path),
+        "epsilon_next_path": str(epsilon_next_path),
         "B_trace": float(np.trace(B_mean)),
         "M": int(M),
     }
     with open(os.path.join(output_dir, "reduce_summary.json"), "w") as f:
         json.dump(meta, f, indent=2)
     print(f"[REDUCE] gamma={GAMMA:.2f}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
-    print(f"[REDUCE] alpha_old: {alpha_old_path.name}")
-    print(f"[REDUCE] alpha_new: {save_path.name}")
+    print(f"[REDUCE] epsilon_old: {epsilon_old_path.name}")
+    print(f"[REDUCE] epsilon_new: {save_path.name}")
+    print(f"[REDUCE] epsilon_next: epsilon_next.npy")
     return save_path
 
 # ==========================
@@ -407,9 +416,9 @@ def parse_args():
     pw.add_argument("--beta", type=float, default=BETA_DEFAULT)
 
     # reduce mode
-    pr = sub.add_parser("reduce", help="Aggregate all per-rep artifacts and write alpha_tk_{n+1}.npy")
+    pr = sub.add_parser("reduce", help="Aggregate all per-rep artifacts and write epsilon_tk_{n+1}.npy")
     pr.add_argument("--output-dir", type=str, required=True)
-    pr.add_argument("--alpha-dir", type=str, required=True)
+    pr.add_argument("--epsilon-dir", type=str, required=True)
 
     return p.parse_args()
 
@@ -508,7 +517,7 @@ def main():
             )
 
     elif args.cmd == "reduce":
-        save_path = reduce_and_update(args.output_dir, args.alpha_dir)
+        save_path = reduce_and_update(args.output_dir, args.epsilon_dir)
         print(f"[DONE] Wrote updated parameters to: {save_path}")
 
 if __name__ == "__main__":

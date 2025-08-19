@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""
+Parameter update step for MaxEnt loop.
+
+The Newton update from process_tkl_update.py produces both epsilon_tk_*.npy 
+files and epsilon_next.npy. This script handles copying epsilon_next to the 
+next iteration and provides diagnostics/convergence tracking, rather than 
+computing its own update.
+"""
 
 import argparse, os, json, shutil, math, subprocess
 from pathlib import Path
@@ -40,60 +48,47 @@ def main():
     iterd = run_root / format_iter(it)
     K = cfg["simulation"]["n_types"]
 
-    # Load current epsilon and vectorize
+    # Load the epsilon_next.npy produced by the Newton update
+    obs_dir = iterd / "obs"
+    epsilon_next_path = obs_dir / "epsilon_next.npy"
+    
+    if not epsilon_next_path.exists():
+        raise FileNotFoundError(f"epsilon_next.npy not found at {epsilon_next_path}. "
+                              "The Newton update step must complete before this update step.")
+    
+    eps_next = np.load(epsilon_next_path)
+    
+    # Load current epsilon for comparison/state tracking
     eps_mat = np.load(iterd / "params" / "epsilon.npy")
     lam = vectorize_upper_tri(eps_mat)
+    lam_next = vectorize_upper_tri(eps_next)
 
-    # Load targets and simulated means
+    # Load targets and simulated means for diagnostics/state tracking
     T = np.load(run_root / "exp_targets" / "T_type_kl.npy")  # vector
     phi, cov_diag = load_phi(iterd)
 
-    # Gradient: g = T - <phi>_sim
+    # Gradient: g = T - <phi>_sim (for diagnostics)
     g = T - phi
+    
+    # Compute delta for state tracking
+    delta = lam_next - lam
 
-    # Preconditioner: diag(C)^-1 with small eps; if cov_diag NaN, replace with median
-    cov = cov_diag.copy()
-    if np.any(~np.isfinite(cov)):
-        finite = cov[np.isfinite(cov)]
-        if finite.size == 0:
-            finite = np.ones_like(cov)  # identity
-        med = float(np.median(finite))
-        cov[~np.isfinite(cov)] = med
-    cov = cov + cfg["update"]["precond_eps"]
-    precond = 1.0 / cov  # elementwise
-
-    # Load previous lam and grad to compute BB eta if available
-    eta = cfg["update"]["eta_init"]
-    prev = iterd.parent / format_iter(it-1) if it > 0 else None
-    if prev and (prev / "update" / "state.json").exists():
-        st_prev = json.loads((prev / "update" / "state.json").read_text())
-        lam_prev = np.array(st_prev["lambda_vec"], dtype=float)
-        g_prev = np.array(st_prev["grad_vec"], dtype=float)
-        eta_prev = float(st_prev["eta"])
-        s = lam - lam_prev
-        y = g - g_prev
-        eta = bb_eta(eta_prev, s, y, cfg["update"]["eta_min"], cfg["update"]["eta_max"], cfg["update"]["bb_clip_fraction"])
-
-    # Update
-    delta = eta * (precond * g)
-    lam_next = lam + delta
-    eps_next = devectorize_upper_tri(lam_next, K)
-
-    # Save update artifacts
+    # Save update artifacts (now mainly for diagnostics and state tracking)
     upd = iterd / "update"
     np.save(upd / "grad.npy", g)
     np.save(upd / "delta_vec.npy", delta)
     np.save(upd / "lambda_vec.npy", lam_next)
-    np.save(upd / "epsilon_next.npy", eps_next)
+    # Note: epsilon_next.npy is already created by the Newton update
     state = {
         "iteration": it,
-        "eta": eta,
+        "eta": "N/A (using Newton update)",
         "lambda_vec": lam_next.tolist(),
         "grad_vec": g.tolist(),
-        "precond_diag": precond.tolist(),
+        "precond_diag": "N/A (using Newton update)",
         "max_abs_residual": float(np.max(np.abs(g))),
         "l2_residual": float(np.linalg.norm(g)),
         "max_param_step": float(np.max(np.abs(delta))),
+        "update_method": "Newton (from process_tkl_update.py)",
     }
     (upd / "state.json").write_text(json.dumps(state, indent=2))
 
@@ -116,7 +111,7 @@ def main():
     track = {"streak": streak, "last_iter": it}
     track_file.write_text(json.dumps(track, indent=2))
 
-    # Prepare next iteration folder and copy epsilon_next
+    # Prepare next iteration folder and copy epsilon_next (which came from Newton update)
     it_next = it + 1
     iterd_next = run_root / format_iter(it_next)
     (iterd_next / "params").mkdir(parents=True, exist_ok=True)
@@ -124,6 +119,10 @@ def main():
     (iterd_next / "obs").mkdir(parents=True, exist_ok=True)
     (iterd_next / "update").mkdir(parents=True, exist_ok=True)
     np.save(iterd_next / "params" / "epsilon.npy", eps_next)
+    
+    # Also ensure epsilon is available for next iteration's Newton update
+    next_epsilon_path = iterd_next / "update" / f"epsilon_tk_{it}.npy"
+    np.save(next_epsilon_path, eps_next)
 
     # Storage policy: delete frames from i-1 (now two iterations behind next run), keep frames for current i
     i_minus_1 = it - 1
