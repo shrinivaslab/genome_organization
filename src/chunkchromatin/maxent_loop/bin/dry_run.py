@@ -202,7 +202,7 @@ class DryRunValidator:
         # Processing inputs
         proc_inputs = self.cfg.get('processing_inputs', {})
         for key, path in proc_inputs.items():
-            if key in ['monomer_types', 'exp_tkl'] and path:
+            if key in ['monomer_types', 'exp_tkl', 'interaction_matrix'] and path:
                 if not Path(path).exists():
                     self.error(f"Processing input file not found: {key} = {path}")
         
@@ -500,6 +500,7 @@ else:
             # Processing settings
             'io_k': self.cfg["resources"]["processing"]["workers"].get("io_k", 2),
             'monomer_types': self.cfg["processing_inputs"]["monomer_types"],
+            'interaction_matrix': self.cfg["processing_inputs"]["interaction_matrix"],
             'exp_tkl': self.cfg["processing_inputs"]["exp_tkl"],
             'kernel_cli': "--mu 4.22 --rc 1.82 --rcut 3.0 --beta 1.0",
             

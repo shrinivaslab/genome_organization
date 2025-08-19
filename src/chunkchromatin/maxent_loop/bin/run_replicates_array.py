@@ -24,9 +24,18 @@ rep_idx = args.replicate_id
 rep_name = f"rep{rep_idx+1:02d}"
 
 # === CONFIGURATION ===
-output_base = "/gpfs/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/MaxEnt_testing/tanh/first_replicate_run/data/first_replicate_run"
-monomer_types_path = "/gpfs/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types.npy"
-interaction_matrix_path = "/gpfs/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/interaction_matrix.npy"
+output_base = os.environ.get("MAXENT_REPL_OUT_BASE")
+if not output_base:
+    raise ValueError("MAXENT_REPL_OUT_BASE environment variable not set")
+
+# Use environment variables for input paths to avoid hardcoded paths
+monomer_types_path = os.environ.get("MAXENT_MONOMER_TYPES")
+if not monomer_types_path:
+    raise ValueError("MAXENT_MONOMER_TYPES environment variable not set")
+
+interaction_matrix_path = os.environ.get("MAXENT_INTERACTION_MATRIX") 
+if not interaction_matrix_path:
+    raise ValueError("MAXENT_INTERACTION_MATRIX environment variable not set")
 
 N = 3725
 density = 0.33
