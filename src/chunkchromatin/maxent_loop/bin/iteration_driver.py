@@ -9,9 +9,13 @@ def main():
     ap.add_argument("--iter", required=True, type=int)
     ap.add_argument("--config", required=True)
     ap.add_argument("--name", required=True)
+    ap.add_argument("--proj-root", required=True)
     args = ap.parse_args()
 
     run_root = Path(args.run_root).resolve()
+    proj_root = Path(args.proj_root).resolve()
+    tpl_dir   = proj_root / "templates"
+    bin_dir   = proj_root / "bin"
     cfg = load_config(Path(args.config))
     iterd = run_root / format_iter(args.iter)
     logd = ensure_dir(run_root / "logs")
@@ -30,7 +34,7 @@ def main():
     per_task = int(sim_res.get("per_task_replicates", 1))
     array_len = int(sim_res["array_len"])
     # Safety: array_len * per_task should cover n_replicates; extra slots are clipped in the template
-    sim_script_tpl = (Path(__file__).resolve().parent.parent / "templates" / "sbatch_sim_array.sh")
+    sim_script_tpl = (tpl_dir / "sbatch_sim_array.sh")
     sim_script_text = sim_script_tpl.read_text().format(
         job_name=f"{args.name}_sim_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -54,7 +58,7 @@ def main():
         obs_dir=str(iterd / "obs"),
         n_types=cfg["simulation"]["n_types"],
         run_replicates_array=cfg["paths"]["run_replicates_array"],
-        series_runner=str((Path(__file__).resolve().parent / "series_runner.py").resolve()),
+        series_runner=str((bin_dir / "series_runner.py").resolve()),
         per_task_reps=per_task,
     )
     sim_sbatch = iterd / "sims" / "submit_sim_array.sh"
@@ -70,12 +74,12 @@ def main():
     inputs = cfg["processing_inputs"]
     kf = (inputs.get("kernel_flags") or {})
     kernel_cli = ""
-    # Build optional kernel flags like: --mu 4.22 --rc 1.82 --rcut 3.0 --beta 1.0
+
     for key in ("mu", "rc", "rcut", "beta"):
         if key in kf and kf[key] is not None:
             kernel_cli += f" --{key} {kf[key]}"
 
-    procw_tpl = (Path(__file__).resolve().parent.parent / "templates" / "sbatch_process_worker.sh")
+    procw_tpl = (tpl_dir / "sbatch_process_worker.sh")
     procw_text = procw_tpl.read_text().format(
         job_name=f"{args.name}_pwrk_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -106,7 +110,7 @@ def main():
     # ------------------------------------
     procr = cfg["resources"]["processing"]["reduce"]
     alpha_dir = procr.get("alpha_dir") or str(iterd / "update")
-    procr_tpl = (Path(__file__).resolve().parent.parent / "templates" / "sbatch_process_reduce.sh")
+    procr_tpl = (tpl_dir / "sbatch_process_reduce.sh")
     procr_text = procr_tpl.read_text().format(
         job_name=f"{args.name}_pred_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -128,7 +132,7 @@ def main():
     write_json(iterd / "obs" / "submit_reduce.json", {"jobid": procr_jobid, "depends_on": procw_jobid})
 
     # ------------- UPDATE depends on REDUCE -------------
-    upd_script = (Path(__file__).resolve().parent.parent / "templates" / "sbatch_update.sh")
+    upd_script = (tpl_dir / "sbatch_update.sh")
     upd_script_text = upd_script.read_text().format(
         job_name=f"{args.name}_update_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -140,7 +144,7 @@ def main():
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
         log_dir=str(logd),
         iter_dir=str(iterd),
-        update_step=str((Path(__file__).resolve().parent / "update_step.py").resolve()),
+        update_step=str((bin_dir / "update_step.py").resolve()),
         run_root=str(run_root),
         iter_idx=args.iter,
         config_yaml=str(Path(args.config).resolve()),
@@ -152,9 +156,9 @@ def main():
 
 
     # ------------------------------------
-    # UPDATE + CONTINUE (unchanged)
+    # UPDATE + CONTINUE
     # ------------------------------------
-    upd_script_tpl = (Path(__file__).resolve().parent.parent / "templates" / "sbatch_update.sh")
+    upd_script_tpl = (tpl_dir / "sbatch_update.sh")
     upd_script_text = upd_script_tpl.read_text().format(
         job_name=f"{args.name}_update_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -166,7 +170,7 @@ def main():
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
         log_dir=str(logd),
         iter_dir=str(iterd),
-        update_step=str((Path(__file__).resolve().parent / "update_step.py").resolve()),
+        update_step=str((bin_dir / "update_step.py").resolve()),
         run_root=str(run_root),
         iter_idx=args.iter,
         config_yaml=str(Path(args.config).resolve()),
