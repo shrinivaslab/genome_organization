@@ -2,7 +2,7 @@
 import argparse, os, shutil
 from pathlib import Path
 import numpy as np
-from chunkchromatin.maxent_loop.utils import ensure_dir, write_json, load_config, prepare_seeds, human_time, format_iter
+from chunkchromatin.maxent_loop.bin.utils import ensure_dir, write_json, load_config, prepare_seeds, human_time, format_iter
 
 def main():
     ap = argparse.ArgumentParser()
