@@ -11,7 +11,9 @@ def main():
     ap.add_argument("--name", required=True, help="Short run name used in job names")
     ap.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config.yaml"))
     args = ap.parse_args()
+    
 
+    proj_root = Path(__file__).resolve().parent.parent
     run_root = Path(args.run_root).resolve()
     cfg = load_config(Path(args.config))
 
@@ -64,20 +66,21 @@ def main():
     driver = Path(__file__).resolve().parent / "iteration_driver.py"
     import subprocess
     cmd = ["sbatch",
-           "--job-name", f"{args.name}_iter000_driver",
-           "--account", cfg["slurm"]["account"],
-           "--partition", cfg["slurm"]["partition"],
-           "--time", "00:10:00",
-           "--cpus-per-task", "1",
-           "--mem", "1G",
-           "--output", str((run_root / "logs" / "driver_%j.out")),
-           "--error",  str((run_root / "logs" / "driver_%j.err")),
-           str(driver),
-           "--run-root", str(run_root),
-           "--iter", "0",
-           "--config", str(Path(args.config).resolve()),
-           "--name", args.name,
-           ]
+       "--job-name", f"{args.name}_iter000_driver",
+       "--account", cfg["slurm"]["account"],
+       "--partition", cfg["slurm"]["partition"],
+       "--time", "00:10:00",
+       "--cpus-per-task", "1",
+       "--mem", "1G",
+       "--output", str((run_root / "logs" / "driver_%j.out")),
+       "--error",  str((run_root / "logs" / "driver_%j.err")),
+       str(driver),
+       "--run-root", str(run_root),
+       "--iter", "0",
+       "--config", str(Path(args.config).resolve()),
+       "--name", args.name,
+       "--proj-root", str(proj_root),
+            ]
     # Optional constraints
     if cfg["slurm"].get("constraint"):
         cmd[1:1] = ["--constraint", cfg["slurm"]["constraint"]]
