@@ -13,6 +13,7 @@ src/chunkchromatin/maxent_loop/bin/maxent_loop.py
 src/chunkchromatin/maxent_loop/bin/series_runner.py
 src/chunkchromatin/maxent_loop/bin/update_step.py
 src/chunkchromatin/maxent_loop/bin/utils.py
+src/chunkchromatin/maxent_loop/bin/watchdog.py
 src/chunkchromatin/maxent_loop/exp_targets/Tkl_exp.py
 src/genome_organization.egg-info/PKG-INFO
 src/genome_organization.egg-info/SOURCES.txt
