@@ -340,11 +340,12 @@ class DryRunValidator:
             # Job settings
             'job_name': f"{self.args.name}_test_001",
             'account': self.cfg["slurm"]["account"],
-            'partition': self.cfg["slurm"]["partition"],
+            'partition': self.cfg["resources"]["simulation"].get("partition", self.cfg["slurm"]["partition"]),
             'time_limit': "4:00:00",
             'cpus_per_task': 7,
             'workers': 7,
             'mem': "25G",
+            'gres': self.cfg["resources"]["simulation"].get("gres", ""),
             'array_max': 4,
             'constraint_line': f"#SBATCH --constraint={self.cfg['slurm'].get('constraint')}\n" if self.cfg["slurm"].get("constraint") else "",
             'qos_line': f"#SBATCH --qos={self.cfg['slurm'].get('qos')}\n" if self.cfg["slurm"].get("qos") else "",

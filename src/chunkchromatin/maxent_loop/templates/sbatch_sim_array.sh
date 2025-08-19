@@ -6,6 +6,7 @@
 #SBATCH --time={time_limit}
 #SBATCH --cpus-per-task={cpus_per_task}
 #SBATCH --mem={mem}
+#SBATCH --gres={gres}
 #SBATCH --array=0-{array_max}
 {constraint_line}{qos_line}
 #SBATCH --output={log_dir}/sim_%A_%a.out
