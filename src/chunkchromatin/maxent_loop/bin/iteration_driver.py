@@ -40,7 +40,7 @@ def main():
         account=cfg["slurm"]["account"],
         partition=cfg["slurm"]["partition"],
         time_limit=sim_res["time_limit"],
-        cpus=sim_res["cpus_per_task"],
+        cpus_per_task=sim_res["cpus_per_task"],
         mem=sim_res["mem"],
         array_max=array_len - 1,
         constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
@@ -57,7 +57,7 @@ def main():
         targets_npy=str(targets_npy),
         obs_dir=str(iterd / "obs"),
         n_types=cfg["simulation"]["n_types"],
-        run_replicates_array=cfg["paths"]["run_replicates_array"],
+        run_replicates_array=str((bin_dir / "run_replicates_array.py").resolve()),
         series_runner=str((bin_dir / "series_runner.py").resolve()),
         per_task_reps=per_task,
     )
@@ -85,7 +85,8 @@ def main():
         account=cfg["slurm"]["account"],
         partition=cfg["slurm"]["partition"],
         time_limit=procw["time_limit"],
-        cpus=procw["cpus_per_task"],
+        cpus_per_task=procw["cpus_per_task"],
+        workers=procw["cpus_per_task"],
         mem=procw["mem"],
         array_max=int(procw["array_len"]) - 1,
         constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
@@ -93,11 +94,12 @@ def main():
         log_dir=str(logd),
         iter_dir=str(iterd),
         obs_dir=str(iterd / "obs"),
+        replicate_root=str(iterd / "sims"),
         n_reps=cfg["simulation"]["n_replicates"],
         io_k=int(procw.get("io_k", 2)),
         monomer_types=str(Path(inputs["monomer_types"]).resolve()),
         exp_tkl=str(Path(inputs["exp_tkl"]).resolve()),
-        process_tkl_update=cfg["paths"]["process_tkl_update"],
+        process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
         kernel_cli=kernel_cli.strip(),
     )
     procw_sbatch = iterd / "obs" / "submit_process_worker.sh"
@@ -116,7 +118,7 @@ def main():
         account=cfg["slurm"]["account"],
         partition=cfg["slurm"]["partition"],
         time_limit=procr["time_limit"],
-        cpus=procr["cpus_per_task"],
+        cpus_per_task=procr["cpus_per_task"],
         mem=procr["mem"],
         constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
@@ -124,21 +126,23 @@ def main():
         iter_dir=str(iterd),
         obs_dir=str(iterd / "obs"),
         alpha_dir=alpha_dir,
-        process_tkl_update=cfg["paths"]["process_tkl_update"],
+        process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
     )
     procr_sbatch = iterd / "obs" / "submit_process_reduce.sh"
     procr_sbatch.write_text(procr_text); make_executable(procr_sbatch)
     procr_jobid = sbatch_submit(procr_sbatch, extra_args=[f"--dependency=afterok:{procw_jobid}"])
     write_json(iterd / "obs" / "submit_reduce.json", {"jobid": procr_jobid, "depends_on": procw_jobid})
 
-    # ------------- UPDATE depends on REDUCE -------------
-    upd_script = (tpl_dir / "sbatch_update.sh")
-    upd_script_text = upd_script.read_text().format(
+    # ------------------------------------
+    # UPDATE (single job) using update_step.py
+    # ------------------------------------
+    upd_script_tpl = (tpl_dir / "sbatch_update.sh")
+    upd_script_text = upd_script_tpl.read_text().format(
         job_name=f"{args.name}_update_{args.iter:03d}",
         account=cfg["slurm"]["account"],
         partition=cfg["slurm"]["partition"],
         time_limit="00:20:00",
-        cpus=2,
+        cpus_per_task=2,
         mem="4G",
         constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
@@ -153,32 +157,6 @@ def main():
     upd_sbatch.write_text(upd_script_text); make_executable(upd_sbatch)
     upd_jobid = sbatch_submit(upd_sbatch, extra_args=[f"--dependency=afterok:{procr_jobid}"])
     write_json(iterd / "update" / "submit.json", {"jobid": upd_jobid, "depends_on": procr_jobid})
-
-
-    # ------------------------------------
-    # UPDATE + CONTINUE
-    # ------------------------------------
-    upd_script_tpl = (tpl_dir / "sbatch_update.sh")
-    upd_script_text = upd_script_tpl.read_text().format(
-        job_name=f"{args.name}_update_{args.iter:03d}",
-        account=cfg["slurm"]["account"],
-        partition=cfg["slurm"]["partition"],
-        time_limit="00:20:00",
-        cpus=2,
-        mem="4G",
-        constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
-        qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
-        log_dir=str(logd),
-        iter_dir=str(iterd),
-        update_step=str((bin_dir / "update_step.py").resolve()),
-        run_root=str(run_root),
-        iter_idx=args.iter,
-        config_yaml=str(Path(args.config).resolve()),
-    )
-    upd_sbatch = iterd / "update" / "submit_update.sh"
-    upd_sbatch.write_text(upd_script_text); make_executable(upd_sbatch)
-    upd_jobid = sbatch_submit(upd_sbatch, extra_args=[f"--dependency=afterok:{proc_jobid}"])
-    write_json(iterd / "update" / "submit.json", {"jobid": upd_jobid, "depends_on": proc_jobid})
 
 if __name__ == "__main__":
     main()

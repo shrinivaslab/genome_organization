@@ -4,7 +4,7 @@
 #SBATCH --account={account}
 #SBATCH --partition={partition}
 #SBATCH --time={time_limit}
-#SBATCH --cpus-per-task={cpus}
+#SBATCH --cpus-per-task={cpus_per_task}
 #SBATCH --mem={mem}
 {constraint_line}{qos_line}
 #SBATCH --output={log_dir}/proc_reduce_%j.out
@@ -23,6 +23,6 @@ alpha_dir="{alpha_dir}"
 
 echo "[proc:reduce] $(date) reducing shards for {iter_dir}"
 python "{process_tkl_update}" reduce \
-  --output-dir "${output_dir}" \
-  --alpha-dir  "${alpha_dir}"
+  --output-dir "${{output_dir}}" \
+  --alpha-dir  "${{alpha_dir}}"
 echo "[proc:reduce] $(date) done"

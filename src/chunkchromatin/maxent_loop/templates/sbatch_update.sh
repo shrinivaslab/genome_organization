@@ -3,9 +3,9 @@
 #SBATCH --job-name={job_name}
 #SBATCH --account={account}
 #SBATCH --partition={partition}
-#SBATCH --time=00:20:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=4G
+#SBATCH --time={time_limit}
+#SBATCH --cpus-per-task={cpus_per_task}
+#SBATCH --mem={mem}
 {constraint_line}{qos_line}
 #SBATCH --output={log_dir}/update_%j.out
 #SBATCH --error={log_dir}/update_%j.err

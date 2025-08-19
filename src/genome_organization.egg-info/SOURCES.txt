@@ -10,6 +10,8 @@ src/chunkchromatin/maxEnt.py
 src/chunkchromatin/simulation.py
 src/chunkchromatin/maxent_loop/bin/iteration_driver.py
 src/chunkchromatin/maxent_loop/bin/maxent_loop.py
+src/chunkchromatin/maxent_loop/bin/process_tkl_update.py
+src/chunkchromatin/maxent_loop/bin/run_replicates_array.py
 src/chunkchromatin/maxent_loop/bin/series_runner.py
 src/chunkchromatin/maxent_loop/bin/update_step.py
 src/chunkchromatin/maxent_loop/bin/utils.py
