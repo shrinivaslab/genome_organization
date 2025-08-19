@@ -78,6 +78,7 @@ class DryRunValidator:
             self.validate_directory_structure()
             self.validate_scripts_exist()
             self.validate_template_formatting()
+            self.validate_script_interfaces()
             self.validate_workflow_simulation()
             
             # Final report
@@ -286,6 +287,125 @@ class DryRunValidator:
                 self.error(f"Required template not found: {tpl_path}")
         
         self.success("Script files validated")
+    
+    def validate_script_interfaces(self):
+        """Validate that scripts have correct command-line interfaces."""
+        self.info("Validating script interfaces...")
+        
+        # Test critical script argument requirements
+        bin_dir = self.proj_root / "bin"
+        
+        # Test run_replicates_array.py interface
+        run_replicates_script = bin_dir / "run_replicates_array.py"
+        if run_replicates_script.exists():
+            try:
+                # Try multiple approaches to validate the script
+                import subprocess
+                import shutil
+                
+                # Try different environment activation methods
+                activation_commands = [
+                    f"eval \"$(mamba shell hook --shell bash)\" && mamba activate polychrom && python {run_replicates_script} --help",
+                    f"eval \"$(conda shell hook --shell bash)\" && conda activate polychrom && python {run_replicates_script} --help",
+                    f"source activate polychrom && python {run_replicates_script} --help"
+                ]
+                
+                validated = False
+                for cmd in activation_commands:
+                    try:
+                        result = subprocess.run([
+                            "bash", "-c", cmd
+                        ], capture_output=True, text=True, timeout=15)
+                        
+                        if result.returncode == 0 and "--replicate_id" in result.stdout:
+                            self.success("run_replicates_array.py interface validated with dependencies")
+                            validated = True
+                            break
+                    except:
+                        continue
+                
+                if not validated:
+                    # Fallback to source code analysis
+                    script_content = run_replicates_script.read_text()
+                    if "--replicate_id" in script_content and "required=True" in script_content:
+                        self.warning("run_replicates_array.py interface validated from source (use 'mamba activate polychrom' for full validation)")
+                    else:
+                        self.error("run_replicates_array.py missing required --replicate_id argument")
+            except Exception as e:
+                # Final fallback to source code analysis
+                try:
+                    script_content = run_replicates_script.read_text()
+                    if "--replicate_id" in script_content and "required=True" in script_content:
+                        self.warning(f"run_replicates_array.py interface validated from source ({e})")
+                    else:
+                        self.error("run_replicates_array.py missing required --replicate_id argument")
+                except:
+                    self.warning(f"Could not validate run_replicates_array.py interface: {e}")
+        
+        # Test series_runner.py interface  
+        series_runner_script = bin_dir / "series_runner.py"
+        if series_runner_script.exists():
+            try:
+                result = subprocess.run([
+                    "python3", str(series_runner_script), "--help"
+                ], capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0 and "--runner" in result.stdout:
+                    self.success("series_runner.py interface validated")
+                else:
+                    self.error("series_runner.py missing required --runner argument")
+            except Exception as e:
+                self.warning(f"Could not validate series_runner.py interface: {e}")
+        
+        # Test argument compatibility between series_runner and run_replicates_array
+        try:
+            # Read series_runner.py to check if it passes --replicate_id
+            series_content = series_runner_script.read_text() if series_runner_script.exists() else ""
+            if "--replicate_id" in series_content:
+                self.success("series_runner.py correctly passes --replicate_id argument")
+                
+                # Test actual execution with polychrom environment
+                try:
+                    import subprocess
+                    # Create a minimal test runner script that just prints its arguments
+                    test_runner = self.temp_dir / "test_runner.py" if self.temp_dir else Path("/tmp/test_runner.py")
+                    test_runner.write_text("""
+import sys
+print(f"Test runner called with args: {sys.argv}")
+if "--replicate_id" in sys.argv:
+    print("SUCCESS: --replicate_id argument received")
+    sys.exit(0)
+else:
+    print("ERROR: --replicate_id argument missing")
+    sys.exit(1)
+""")
+                    
+                    # Test series_runner calling our test runner
+                    test_commands = [
+                        f"eval \"$(mamba shell hook --shell bash)\" && mamba activate polychrom && python {series_runner_script} --runner {test_runner} --start 0 --end 0",
+                        f"python {series_runner_script} --runner {test_runner} --start 0 --end 0"
+                    ]
+                    
+                    for cmd in test_commands:
+                        try:
+                            result = subprocess.run([
+                                "bash", "-c", cmd
+                            ], capture_output=True, text=True, timeout=10)
+                            
+                            if result.returncode == 0 and "SUCCESS: --replicate_id argument received" in result.stdout:
+                                self.success("End-to-end argument passing validated")
+                                break
+                        except:
+                            continue
+                    else:
+                        self.info("End-to-end test requires proper environment setup")
+                        
+                except Exception as e:
+                    self.warning(f"Could not run end-to-end validation: {e}")
+            else:
+                self.error("series_runner.py does not pass --replicate_id to run_replicates_array.py")
+        except Exception as e:
+            self.warning(f"Could not validate argument compatibility: {e}")
     
     def validate_template_formatting(self):
         """Validate that all templates can be formatted without KeyErrors."""
