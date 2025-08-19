@@ -30,6 +30,8 @@ export MAXENT_KERNEL_JSON="{kernel_json}"
 export MAXENT_TARGETS_NPY="{targets_npy}"
 export MAXENT_OBS_DIR="{obs_dir}"
 export MAXENT_N_TYPES="{n_types}"
+export MAXENT_MONOMER_TYPES="{monomer_types}"
+export MAXENT_INTERACTION_MATRIX="{interaction_matrix}"
 
 # Compute replicate range for this array task
 TASK_ID="${{SLURM_ARRAY_TASK_ID}}"
