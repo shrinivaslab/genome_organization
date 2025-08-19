@@ -38,10 +38,11 @@ def main():
     sim_script_text = sim_script_tpl.read_text().format(
         job_name=f"{args.name}_sim_{args.iter:03d}",
         account=cfg["slurm"]["account"],
-        partition=cfg["slurm"]["partition"],
+        partition=sim_res.get("partition", cfg["slurm"]["partition"]),  # use sim-specific or default
         time_limit=sim_res["time_limit"],
         cpus_per_task=sim_res["cpus_per_task"],
         mem=sim_res["mem"],
+        gres=sim_res.get("gres", ""),  # GPU allocation for simulations
         array_max=array_len - 1,
         constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
