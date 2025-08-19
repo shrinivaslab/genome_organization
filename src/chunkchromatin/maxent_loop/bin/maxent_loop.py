@@ -24,6 +24,7 @@ def main():
         print(f"Resuming run at iteration {args.resume_iter}")
         if args.resume_step == "process":
             # Special handling for process reduce step resume
+            # This will chain to the update step which will continue the iteration loop
             iter_dir = run_root / format_iter(args.resume_iter)
             if not (iter_dir / "update").exists():
                 ensure_dir(iter_dir / "update")
@@ -41,13 +42,14 @@ def main():
                         shutil.copy2(eps0_src, alpha0_path)
                         print(f"Created {alpha0_path} from {eps0_src}")
             
-            # Submit the process reduce step
+            # Submit the process reduce step AND the update step (chained)
             import subprocess
             from chunkchromatin.maxent_loop.bin.utils import sbatch_submit
             tpl_dir = proj_root / "templates"
             bin_dir = proj_root / "bin"
             logd = ensure_dir(run_root / "logs")
             
+            # Process reduce step
             procr = cfg["resources"]["processing"]["reduce"]
             alpha_dir = procr.get("alpha_dir") or str(iter_dir / "update")
             procr_tpl = (tpl_dir / "sbatch_process_reduce.sh")
@@ -72,6 +74,32 @@ def main():
             procr_jobid = sbatch_submit(procr_sbatch)
             write_json(iter_dir / "obs" / "submit_reduce.json", {"jobid": procr_jobid})
             print(f"Submitted process reduce job {procr_jobid} for iteration {args.resume_iter}")
+            
+            # Chain the update step (which will continue the iteration loop)
+            upd_script_tpl = (tpl_dir / "sbatch_update.sh")
+            upd_script_text = upd_script_tpl.read_text().format(
+                job_name=f"{args.name}_update_{args.resume_iter:03d}",
+                account=cfg["slurm"]["account"],
+                partition=cfg["slurm"]["partition"],
+                time_limit="00:20:00",
+                cpus_per_task=2,
+                mem="4G",
+                constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
+                qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
+                log_dir=str(logd),
+                iter_dir=str(iter_dir),
+                update_step=str((bin_dir / "update_step.py").resolve()),
+                run_root=str(run_root),
+                iter_idx=args.resume_iter,
+                config_yaml=str(Path(args.config).resolve()),
+            )
+            upd_sbatch = iter_dir / "update" / "submit_update.sh"
+            upd_sbatch.write_text(upd_script_text)
+            upd_sbatch.chmod(0o755)
+            upd_jobid = sbatch_submit(upd_sbatch, extra_args=[f"--dependency=afterok:{procr_jobid}"])
+            write_json(iter_dir / "update" / "submit.json", {"jobid": upd_jobid, "depends_on": procr_jobid})
+            print(f"Submitted update job {upd_jobid} for iteration {args.resume_iter} (depends on {procr_jobid})")
+            print(f"The update step will automatically continue to iteration {args.resume_iter + 1} if not converged")
             return
         elif args.resume_step == "update":
             # Special handling for update step resume
