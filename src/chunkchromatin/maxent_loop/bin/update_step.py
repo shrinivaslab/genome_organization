@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
 
 import argparse, os, json, shutil, math, subprocess
 from pathlib import Path
 import numpy as np
-from utils import ensure_dir, load_config, vectorize_upper_tri, devectorize_upper_tri, write_json, format_iter, delete_dir_if_exists
+from chunkchromatin.maxent_loop.utils import ensure_dir, load_config, vectorize_upper_tri, devectorize_upper_tri, write_json, format_iter, delete_dir_if_exists
 
 def load_phi(iter_dir: Path):
     obs = iter_dir / "obs"
