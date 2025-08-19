@@ -24,82 +24,112 @@ def main():
         print(f"Resuming run at iteration {args.resume_iter}")
         if args.resume_step == "process":
             # Special handling for process reduce step resume
-            # This will chain to the update step which will continue the iteration loop
+            # Clean up the alpha files and then use iteration_driver to handle proper job chaining
             iter_dir = run_root / format_iter(args.resume_iter)
             if not (iter_dir / "update").exists():
                 ensure_dir(iter_dir / "update")
             
-            # If this is iter_000 and no alpha_tk_0.npy exists, create it
-            if args.resume_iter == 0:
-                alpha0_path = iter_dir / "update" / "alpha_tk_0.npy"
-                if not alpha0_path.exists():
+            # Check alpha file situation for any iteration
+            update_dir = iter_dir / "update"
+            existing_alphas = list(update_dir.glob("alpha_tk_*.npy"))
+            
+            if len(existing_alphas) == 0:
+                # No alpha files exist - need to create the appropriate one
+                if args.resume_iter == 0:
+                    # For iteration 0, create alpha_tk_0.npy from initial epsilon
+                    alpha_path = update_dir / "alpha_tk_0.npy"
                     eps_path = iter_dir / "params" / "epsilon.npy"
                     if eps_path.exists():
-                        shutil.copy2(eps_path, alpha0_path)
-                        print(f"Created {alpha0_path} from {eps_path}")
+                        shutil.copy2(eps_path, alpha_path)
+                        print(f"Created {alpha_path} from {eps_path}")
                     else:
                         eps0_src = Path(args.initial_epsilon).resolve()
-                        shutil.copy2(eps0_src, alpha0_path)
-                        print(f"Created {alpha0_path} from {eps0_src}")
+                        shutil.copy2(eps0_src, alpha_path)
+                        print(f"Created {alpha_path} from {eps0_src}")
+                else:
+                    # For later iterations, should copy from previous iteration
+                    prev_iter = args.resume_iter - 1
+                    prev_iter_dir = run_root / format_iter(prev_iter)
+                    prev_update_dir = prev_iter_dir / "update"
+                    
+                    # Find the latest alpha file from previous iteration
+                    prev_alphas = list(prev_update_dir.glob("alpha_tk_*.npy"))
+                    if prev_alphas:
+                        # Find the highest numbered alpha file
+                        import re
+                        max_n = -1
+                        latest_alpha = None
+                        for alpha_file in prev_alphas:
+                            m = re.match(r"alpha_tk_(\d+)\.npy", alpha_file.name)
+                            if m:
+                                n = int(m.group(1))
+                                if n > max_n:
+                                    max_n = n
+                                    latest_alpha = alpha_file
+                        
+                        if latest_alpha:
+                            # Copy as alpha_tk_{max_n}.npy (same number as source)
+                            alpha_path = update_dir / latest_alpha.name
+                            shutil.copy2(latest_alpha, alpha_path)
+                            print(f"Copied {latest_alpha} to {alpha_path}")
+                        else:
+                            print(f"ERROR: Could not find valid alpha files in {prev_update_dir}")
+                            return
+                    else:
+                        print(f"ERROR: No alpha files found in previous iteration {prev_update_dir}")
+                        return
+            elif len(existing_alphas) == 1:
+                # Exactly one alpha file exists - should be fine
+                print(f"Found existing alpha file: {existing_alphas[0].name}")
+            else:
+                # Multiple alpha files - warn user but continue (might be expected)
+                print("Found multiple alpha files:")
+                for alpha_file in existing_alphas:
+                    print(f"  - {alpha_file.name}")
+                print("The process reduce step will use the highest numbered file.")
+                print("If this is not intended, please clean up manually before resuming.")
             
-            # Submit the process reduce step AND the update step (chained)
+            print("Now running process reduce step directly...")
+            
+            # Run process reduce step directly (no SLURM)
             import subprocess
-            from chunkchromatin.maxent_loop.bin.utils import sbatch_submit
-            tpl_dir = proj_root / "templates"
-            bin_dir = proj_root / "bin"
-            logd = ensure_dir(run_root / "logs")
+            reduce_cmd = [
+                "python", str(proj_root / "bin" / "process_tkl_update.py"), "reduce",
+                "--output-dir", str(iter_dir / "obs"),
+                "--alpha-dir", str(iter_dir / "update")
+            ]
+            print("Running:", " ".join(reduce_cmd))
+            result = subprocess.run(reduce_cmd, capture_output=True, text=True)
             
-            # Process reduce step
-            procr = cfg["resources"]["processing"]["reduce"]
-            alpha_dir = procr.get("alpha_dir") or str(iter_dir / "update")
-            procr_tpl = (tpl_dir / "sbatch_process_reduce.sh")
-            procr_text = procr_tpl.read_text().format(
-                job_name=f"{args.name}_pred_{args.resume_iter:03d}",
-                account=cfg["slurm"]["account"],
-                partition=cfg["slurm"]["partition"],
-                time_limit=procr["time_limit"],
-                cpus_per_task=procr["cpus_per_task"],
-                mem=procr["mem"],
-                constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
-                qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
-                log_dir=str(logd),
-                iter_dir=str(iter_dir),
-                obs_dir=str(iter_dir / "obs"),
-                alpha_dir=alpha_dir,
-                process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
-            )
-            procr_sbatch = iter_dir / "obs" / "submit_process_reduce.sh"
-            procr_sbatch.write_text(procr_text)
-            procr_sbatch.chmod(0o755)
-            procr_jobid = sbatch_submit(procr_sbatch)
-            write_json(iter_dir / "obs" / "submit_reduce.json", {"jobid": procr_jobid})
-            print(f"Submitted process reduce job {procr_jobid} for iteration {args.resume_iter}")
+            if result.returncode != 0:
+                print("Process reduce step failed:")
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+                return
             
-            # Chain the update step (which will continue the iteration loop)
-            upd_script_tpl = (tpl_dir / "sbatch_update.sh")
-            upd_script_text = upd_script_tpl.read_text().format(
-                job_name=f"{args.name}_update_{args.resume_iter:03d}",
-                account=cfg["slurm"]["account"],
-                partition=cfg["slurm"]["partition"],
-                time_limit="00:20:00",
-                cpus_per_task=2,
-                mem="4G",
-                constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
-                qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
-                log_dir=str(logd),
-                iter_dir=str(iter_dir),
-                update_step=str((bin_dir / "update_step.py").resolve()),
-                run_root=str(run_root),
-                iter_idx=args.resume_iter,
-                config_yaml=str(Path(args.config).resolve()),
-            )
-            upd_sbatch = iter_dir / "update" / "submit_update.sh"
-            upd_sbatch.write_text(upd_script_text)
-            upd_sbatch.chmod(0o755)
-            upd_jobid = sbatch_submit(upd_sbatch, extra_args=[f"--dependency=afterok:{procr_jobid}"])
-            write_json(iter_dir / "update" / "submit.json", {"jobid": upd_jobid, "depends_on": procr_jobid})
-            print(f"Submitted update job {upd_jobid} for iteration {args.resume_iter} (depends on {procr_jobid})")
-            print(f"The update step will automatically continue to iteration {args.resume_iter + 1} if not converged")
+            print("Process reduce step completed successfully!")
+            print("STDOUT:", result.stdout)
+            
+            # Run update step directly (no SLURM)
+            print("Now running update step directly...")
+            update_cmd = [
+                "python", str(proj_root / "bin" / "update_step.py"),
+                "--run-root", str(run_root),
+                "--iter", str(args.resume_iter),
+                "--config", str(Path(args.config).resolve())
+            ]
+            print("Running:", " ".join(update_cmd))
+            result = subprocess.run(update_cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print("Update step failed:")
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+                return
+            
+            print("Update step completed successfully!")
+            print("STDOUT:", result.stdout)
+            print("The iteration loop should now continue normally.")
             return
         elif args.resume_step == "update":
             # Special handling for update step resume
