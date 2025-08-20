@@ -13,6 +13,8 @@
 set -euo pipefail
 
 module purge || true
+# Load micromamba module if available
+module load micromamba || echo "Warning: micromamba module not found, trying direct path"
 eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
 
 export MAXENT_ITER_DIR="{iter_dir}"
