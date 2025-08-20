@@ -290,16 +290,42 @@ def _find_latest_epsilon(epsilon_dir: Path, stem: str = "epsilon_tk_", ext: str 
         raise FileNotFoundError(f"No prior epsilon_tk_*.npy found in {epsilon_dir}")
     return latest
 
-def _next_version_path(dirpath: Path, stem: str = "epsilon_tk_", ext: str = ".npy") -> Path:
-    patt = re.compile(rf"^{re.escape(stem)}(\d+){re.escape(ext)}$")
-    max_n = -1
-    for p in dirpath.glob(f"{stem}*{ext}"):
-        m = patt.match(p.name)
-        if m:
-            max_n = max(max_n, int(m.group(1)))
-    return dirpath / f"{stem}{max_n + 1}{ext}"
+def _next_version_path(dirpath: Path, stem: str = "epsilon_tk_", ext: str = ".npy", iteration_idx: int = None) -> Path:
+    """
+    Generate the next epsilon filename. For iteration i, should produce epsilon_tk_{i+1}.npy.
+    If iteration_idx is provided, uses that as the target. Otherwise, uses the legacy +1 logic.
+    
+    When using iteration_idx, will overwrite existing files to prevent version escalation
+    during resume operations.
+    """
+    if iteration_idx is not None:
+        # For iteration i, create epsilon_tk_{i+1}.npy
+        target_n = iteration_idx + 1
+        target_path = dirpath / f"{stem}{target_n}{ext}"
+        
+        # Clean up any higher-numbered epsilon files that shouldn't exist
+        # (These can occur from repeated resume operations)
+        patt = re.compile(rf"^{re.escape(stem)}(\d+){re.escape(ext)}$")
+        for p in dirpath.glob(f"{stem}*{ext}"):
+            m = patt.match(p.name)
+            if m:
+                n = int(m.group(1))
+                if n > target_n:
+                    print(f"[CLEANUP] Removing unexpected epsilon file: {p.name}")
+                    p.unlink()
+        
+        return target_path
+    else:
+        # Legacy behavior: find max and add 1
+        patt = re.compile(rf"^{re.escape(stem)}(\d+){re.escape(ext)}$")
+        max_n = -1
+        for p in dirpath.glob(f"{stem}*{ext}"):
+            m = patt.match(p.name)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        return dirpath / f"{stem}{max_n + 1}{ext}"
 
-def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT):
+def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=None):
     """
     Read all repXX_upper_grad_hess.npz in output_dir, average grad & Hess,
     apply one damped Newton step, and save epsilon_tk_{n+1}.npy in epsilon_dir.
@@ -360,7 +386,7 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT):
         raise ValueError(f"epsilon_old shape {epsilon_old.shape} != ({K},{K})")
     epsilon_new = epsilon_old + delta_mat
 
-    save_path = _next_version_path(epsilon_dir)
+    save_path = _next_version_path(epsilon_dir, iteration_idx=iteration_idx)
     np.save(save_path, epsilon_new)
 
     # Also save as epsilon_next.npy for the pipeline
@@ -486,6 +512,7 @@ def parse_args():
     pr = sub.add_parser("reduce", help="Aggregate all per-rep artifacts and write epsilon_tk_{n+1}.npy")
     pr.add_argument("--output-dir", type=str, required=True)
     pr.add_argument("--epsilon-dir", type=str, required=True)
+    pr.add_argument("--iteration", type=int, help="Current iteration index (for proper epsilon naming)")
 
     return p.parse_args()
 
@@ -497,15 +524,14 @@ def compute_chunk_for_array(n_total, array_idx, array_count):
     """
     if array_idx is None or array_count is None:
         raise ValueError("array_idx and array_count must be provided to auto-chunk.")
-    if array_idx < 0:
-        # allow SLURM 1-based IDs too
-        array_idx -= 1
-    # normalize to 0-based
-    # If passed a 1-based ID, shift:
-    # (We accept either; if it's already 0..array_count-1 nothing breaks)
+    # Handle 1-based SLURM array indices (convert to 0-based)
+    # SLURM arrays typically start at 1, so we need to convert to 0-based indexing
     if array_idx >= array_count:
-        # Try 1-based fix:
+        # Likely 1-based indexing, convert to 0-based
         array_idx = array_idx - 1
+    elif array_idx < 0:
+        # Invalid negative index
+        raise ValueError(f"array_idx={array_idx} cannot be negative")
     if not (0 <= array_idx < array_count):
         raise ValueError(f"array_idx={array_idx} out of range for array_count={array_count}")
 
@@ -584,7 +610,7 @@ def main():
             )
 
     elif args.cmd == "reduce":
-        save_path = reduce_and_update(args.output_dir, args.epsilon_dir)
+        save_path = reduce_and_update(args.output_dir, args.epsilon_dir, iteration_idx=args.iteration)
         print(f"[DONE] Wrote updated parameters to: {save_path}")
 
 if __name__ == "__main__":

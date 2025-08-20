@@ -126,7 +126,8 @@ def main():
             reduce_cmd = [
                 "python", str(proj_root / "bin" / "process_tkl_update.py"), "reduce",
                 "--output-dir", str(iter_dir / "obs"),
-                "--epsilon-dir", str(iter_dir / "update")
+                "--epsilon-dir", str(iter_dir / "update"),
+                "--iteration", str(args.resume_iter)
             ]
             print("Running:", " ".join(reduce_cmd))
             result = subprocess.run(reduce_cmd, capture_output=True, text=True)

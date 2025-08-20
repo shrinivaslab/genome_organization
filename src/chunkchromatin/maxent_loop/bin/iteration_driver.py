@@ -130,6 +130,7 @@ def main():
         obs_dir=str(iterd / "obs"),
         epsilon_dir=epsilon_dir,
         process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
+        iteration=args.iter,
     )
     procr_sbatch = iterd / "obs" / "submit_process_reduce.sh"
     procr_sbatch.write_text(procr_text); make_executable(procr_sbatch)
