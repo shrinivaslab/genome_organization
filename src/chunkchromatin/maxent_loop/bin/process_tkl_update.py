@@ -383,14 +383,34 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT):
     
     if exp_targets_path:
         try:
-            T_exp = np.load(exp_targets_path)  # Experimental targets (vector form)
+            T_exp_full = np.load(exp_targets_path)  # Experimental targets (could be matrix or vector)
+            
+            # Convert T_exp to vector format if it's a matrix
+            if T_exp_full.ndim == 2:
+                # Convert matrix to upper triangular vector
+                T_exp_vec, _ = _flatten_upper(T_exp_full)
+                print(f"[REDUCE] Converted T_exp matrix {T_exp_full.shape} to vector {T_exp_vec.shape}")
+            else:
+                # Already in vector format
+                T_exp_vec = T_exp_full
+                print(f"[REDUCE] Using T_exp vector shape {T_exp_vec.shape}")
+            
             phi_sims = []
+            
+            # Validate shapes before processing
+            sample_file = files[0]
+            z_sample = np.load(sample_file)
+            grad_sample = z_sample["grad_vec"]
+            print(f"[REDUCE] grad_vec shape: {grad_sample.shape}, T_exp_vec shape: {T_exp_vec.shape}")
+            
+            if grad_sample.shape != T_exp_vec.shape:
+                raise ValueError(f"Shape mismatch: grad_vec {grad_sample.shape} != T_exp_vec {T_exp_vec.shape}")
             
             for fpath in files:
                 z = np.load(fpath)
                 grad_vec = z["grad_vec"] 
                 # Reconstruct simulated observables: phi_sim = (grad / beta) + T_exp
-                phi_sim = (grad_vec / beta) + T_exp
+                phi_sim = (grad_vec / beta) + T_exp_vec
                 phi_sims.append(phi_sim)
             
             # Compute mean and save
