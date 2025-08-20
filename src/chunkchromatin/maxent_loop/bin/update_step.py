@@ -153,8 +153,20 @@ def main():
     # Submit next iteration driver
     driver = Path(__file__).resolve().parent / "iteration_driver.py"
     cfg_path = Path(args.config).resolve()
-    name = json.loads((run_root / "run_manifest.json").read_text())["name"]
+    
+    # Try to get name from run_manifest.json, fallback to generic name
+    manifest_path = run_root / "run_manifest.json"
+    if manifest_path.exists():
+        try:
+            name = json.loads(manifest_path.read_text())["name"]
+        except (json.JSONDecodeError, KeyError):
+            name = f"resumed_iter{it}"
+            print(f"Warning: Could not read name from run_manifest.json, using: {name}")
+    else:
+        name = f"resumed_iter{it}"
+        print(f"Warning: run_manifest.json not found, using generic name: {name}")
 
+    proj_root = Path(__file__).resolve().parent.parent
     cmd = ["sbatch",
            "--job-name", f"{name}_iter{it_next:03d}_driver",
            "--account", cfg["slurm"]["account"],
@@ -169,6 +181,7 @@ def main():
            "--iter", str(it_next),
            "--config", str(cfg_path),
            "--name", name,
+           "--proj-root", str(proj_root),
            ]
     # Optional constraints
     if cfg["slurm"].get("constraint"):

@@ -100,8 +100,9 @@ class DryRunValidator:
         if not self.args.run_root:
             self.error("--run-root is required")
         
+        # For dry run, we'll require initial-epsilon since we're testing new run setup
         if not self.args.initial_epsilon:
-            self.error("--initial-epsilon is required")
+            self.error("--initial-epsilon is required for dry run validation")
             
         if not self.args.name:
             self.error("--name is required")
@@ -657,7 +658,7 @@ Examples:
     # Same arguments as maxent_loop.py
     ap.add_argument("--run-root", required=True, 
                    help="Root directory for this run")
-    ap.add_argument("--initial-epsilon", required=True, 
+    ap.add_argument("--initial-epsilon", 
                    help="Path to KxK epsilon matrix .npy")
     ap.add_argument("--name", required=True, 
                    help="Short run name used in job names")
