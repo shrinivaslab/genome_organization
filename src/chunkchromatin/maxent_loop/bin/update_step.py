@@ -64,7 +64,17 @@ def main():
     lam_next = vectorize_upper_tri(eps_next)
 
     # Load targets and simulated means for diagnostics/state tracking
-    T = np.load(run_root / "exp_targets" / "T_type_kl.npy")  # vector
+    targets_path = run_root / "exp_targets" / "T_type_kl.npy"
+    if not targets_path.exists():
+        raise FileNotFoundError(f"Experimental targets not found: {targets_path}")
+    
+    T_full = np.load(targets_path)
+    # Convert T to vector form if it's a matrix
+    if T_full.ndim == 2:
+        T = vectorize_upper_tri(T_full)
+    else:
+        T = T_full
+    
     phi, cov_diag = load_phi(iterd)
 
     # Gradient: g = T - <phi>_sim (for diagnostics)
@@ -121,7 +131,7 @@ def main():
     np.save(iterd_next / "params" / "epsilon.npy", eps_next)
     
     # Also ensure epsilon is available for next iteration's Newton update
-    next_epsilon_path = iterd_next / "update" / f"epsilon_tk_{it}.npy"
+    next_epsilon_path = iterd_next / "update" / f"epsilon_tk_{it_next}.npy"
     np.save(next_epsilon_path, eps_next)
 
     # Storage policy: delete frames from i-1 (now two iterations behind next run), keep frames for current i

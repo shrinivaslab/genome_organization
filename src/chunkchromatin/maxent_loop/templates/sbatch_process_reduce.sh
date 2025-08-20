@@ -24,5 +24,6 @@ epsilon_dir="{epsilon_dir}"
 echo "[proc:reduce] $(date) reducing shards for {iter_dir}"
 python "{process_tkl_update}" reduce \
   --output-dir "${{output_dir}}" \
-  --epsilon-dir  "${{epsilon_dir}}"
+  --epsilon-dir  "${{epsilon_dir}}" \
+  --iteration "{iteration}"
 echo "[proc:reduce] $(date) done"
