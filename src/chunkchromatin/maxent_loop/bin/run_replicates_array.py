@@ -107,6 +107,43 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
         reporter=reporter
     )
     sim.set_positions(monomer_positions_eq)
+
+    force_kwargs_overrides = {
+        "harmonic_bonds": {
+            # Loosen bonds a bit so local packing isn't over‑constrained
+            "bondWiggleDistance": 0.10,   # (σ units)
+            "bondLength": 1.0
+        },
+        "angle_force": {
+            # Match MiChroM reduced-unit stiffness: k_a ≈ 2 ε with ε = kBT
+            "k": 2.0,                     # in kT/rad^2
+            "theta_0": np.pi
+        },
+        "spherical_confinement": {
+            # Use volume fraction ~0.10 and a softer wall
+            "r": "density",
+            "density": 0.10,
+            "k": 1.5,                     # softer than 5.0
+            "center": [0.0, 0.0, 0.0],
+            "invert": False,
+            "particles": None,
+            "name": "spherical_confinement"
+        },
+        "polynomial_repulsive": {
+            # Soften nonbonded repulsion and extend cutoff slightly
+            "trunc": 1.2,                 # energy cap at r→0 in kT
+            "radiusMult": 1.05,
+            "name": "polynomial_repulsive"
+        },
+        "add_nonbonded_pair_potential": {
+            # leave as your current default unless you want to retune αkl here
+        },
+        "tanh_type_force": {
+            # leave as your current default (α matrix already passed in)
+        }
+    }
+
+
     for force_name in forces_list:
         kwargs = {}
         if force_name == "harmonic_bonds":
