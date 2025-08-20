@@ -366,6 +366,53 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT):
     # Also save as epsilon_next.npy for the pipeline
     epsilon_next_path = os.path.join(output_dir, "epsilon_next.npy")
     np.save(epsilon_next_path, epsilon_new)
+    
+    # IMPORTANT: Also create phi_mean.npy from the simulated observables
+    # This is needed by update_step.py for convergence tracking
+    # Since grad = beta * (phi_sim - T_exp), we have phi_sim = (grad / beta) + T_exp
+    
+    # Try to find experimental targets in standard locations
+    exp_targets_path = None
+    for potential_path in [
+        os.path.join(output_dir, "..", "..", "exp_targets", "T_type_kl.npy"),  # run_root/exp_targets/
+        os.path.join(output_dir, "T_type_kl.npy")  # obs/ directory
+    ]:
+        if os.path.exists(potential_path):
+            exp_targets_path = potential_path
+            break
+    
+    if exp_targets_path:
+        try:
+            T_exp = np.load(exp_targets_path)  # Experimental targets (vector form)
+            phi_sims = []
+            
+            for fpath in files:
+                z = np.load(fpath)
+                grad_vec = z["grad_vec"] 
+                # Reconstruct simulated observables: phi_sim = (grad / beta) + T_exp
+                phi_sim = (grad_vec / beta) + T_exp
+                phi_sims.append(phi_sim)
+            
+            # Compute mean and save
+            phi_mean = np.mean(phi_sims, axis=0)
+            phi_mean_path = os.path.join(output_dir, "phi_mean.npy")
+            np.save(phi_mean_path, phi_mean)
+            print(f"[REDUCE] Created phi_mean.npy from {len(files)} replicates")
+            
+            # Also compute covariance diagonal if we have enough data
+            if len(phi_sims) > 1:
+                phi_sims_array = np.array(phi_sims)
+                phi_cov_diag = np.var(phi_sims_array, axis=0, ddof=1)
+                phi_cov_path = os.path.join(output_dir, "phi_cov_diag.npy")
+                np.save(phi_cov_path, phi_cov_diag)
+                print(f"[REDUCE] Created phi_cov_diag.npy")
+                
+        except Exception as e:
+            print(f"[WARNING] Failed to create phi_mean.npy: {e}")
+            print(f"[WARNING] update_step.py may fail without phi_mean.npy")
+    else:
+        print(f"[WARNING] Could not find experimental targets to create phi_mean.npy")
+        print(f"[WARNING] update_step.py may fail without phi_mean.npy")
 
     meta = {
         "gamma": GAMMA,
