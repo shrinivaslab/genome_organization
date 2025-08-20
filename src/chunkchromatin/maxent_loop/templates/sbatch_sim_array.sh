@@ -15,6 +15,8 @@
 set -euo pipefail
 
 module purge || true
+# Load micromamba module if available
+module load micromamba || echo "Warning: micromamba module not found, trying direct path"
 # load your environment here if needed, e.g.:
 # module load anaconda && source activate your_env
 eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u

@@ -145,7 +145,8 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
 
 
     for force_name in forces_list:
-        kwargs = {}
+        #kwargs = {}
+        kwargs = force_kwargs_overrides.get(force_name, {})
         if force_name == "harmonic_bonds":
             force = chromosome.add_harmonic_bond(**kwargs)
         elif force_name == "angle_force":
