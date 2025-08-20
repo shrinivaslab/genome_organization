@@ -13,10 +13,10 @@
 set -euo pipefail
 
 module purge || true
-# Load micromamba module if available
-module load micromamba || echo "Warning: micromamba module not found, trying direct path"
+# Initialize micromamba shell function (required for SLURM batch scripts)
+eval "$(~/.local/bin/micromamba shell hook --shell bash)"
 # load your environment here if needed
-eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
+set +u; micromamba activate chunkchromatin; set -u
 
 echo "[update] $(date) running update step for {iter_dir}"
 python "{update_step}" --run-root "{run_root}" --iter "{iter_idx}" --config "{config_yaml}"

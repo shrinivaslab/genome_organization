@@ -14,10 +14,10 @@
 set -euo pipefail
 
 module purge || true
-# Load micromamba module if available
-module load micromamba || echo "Warning: micromamba module not found, trying direct path"
+# Initialize micromamba shell function (required for SLURM batch scripts)
+eval "$(~/.local/bin/micromamba shell hook --shell bash)"
 # If needed:
-eval "$(micromamba shell hook --shell bash)"; set +u; micromamba activate chunkchromatin; set -u
+set +u; micromamba activate chunkchromatin; set -u
 
 # Canonical env exported for your script (and future use)
 export MAXENT_ITER_DIR="{iter_dir}"
