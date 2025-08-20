@@ -7,7 +7,7 @@ from chunkchromatin.maxent_loop.bin.utils import ensure_dir, write_json, load_co
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-root", required=True, help="Root directory for this run")
-    ap.add_argument("--initial-epsilon", required=True, help="Path to KxK epsilon matrix .npy")
+    ap.add_argument("--initial-epsilon", help="Path to KxK epsilon matrix .npy")
     ap.add_argument("--name", required=True, help="Short run name used in job names")
     ap.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config.yaml"))
     ap.add_argument("--resume-iter", type=int, help="Resume from specific iteration (will skip initial setup)")
@@ -18,6 +18,16 @@ def main():
     proj_root = Path(__file__).resolve().parent.parent
     run_root = Path(args.run_root).resolve()
     cfg = load_config(Path(args.config))
+
+    # Validate arguments based on mode
+    if args.resume_iter is not None:
+        # Resume mode - initial-epsilon not required
+        pass
+    else:
+        # New run mode - initial-epsilon is required
+        if not args.initial_epsilon:
+            print("ERROR: --initial-epsilon is required for new runs (not resuming)")
+            return
 
     # Handle resume mode
     if args.resume_iter is not None:
@@ -43,6 +53,9 @@ def main():
                         shutil.copy2(eps_path, epsilon_path)
                         print(f"Created {epsilon_path} from {eps_path}")
                     else:
+                        if not args.initial_epsilon:
+                            print("ERROR: For iteration 0 resume without existing epsilon.npy, --initial-epsilon is required")
+                            return
                         eps0_src = Path(args.initial_epsilon).resolve()
                         shutil.copy2(eps0_src, epsilon_path)
                         print(f"Created {epsilon_path} from {eps0_src}")
@@ -91,6 +104,23 @@ def main():
             
             print("Now running process reduce step directly...")
             
+            # Verify that obs directory exists and has the necessary files
+            obs_dir = iter_dir / "obs"
+            if not obs_dir.exists():
+                print(f"ERROR: obs directory not found: {obs_dir}")
+                print("The simulation step must complete before running the process reduce step.")
+                return
+            
+            # Check for rep files (simulation outputs)
+            rep_files = list(obs_dir.glob("rep??_upper_grad_hess.npz"))
+            if len(rep_files) == 0:
+                print(f"ERROR: No replicate files found in {obs_dir}")
+                print("The simulation processing must complete before running the reduce step.")
+                print("Expected files like: rep01_upper_grad_hess.npz, rep02_upper_grad_hess.npz, etc.")
+                return
+            
+            print(f"Found {len(rep_files)} replicate files for processing")
+            
             # Run process reduce step directly (no SLURM)
             import subprocess
             reduce_cmd = [
@@ -109,11 +139,43 @@ def main():
             
             print("Process reduce step completed successfully!")
             print("STDOUT:", result.stdout)
-            print("\nParameter update completed.")
-            print("The Newton update produces both epsilon_tk_*.npy and epsilon_next.npy files.")
-            print("This unified system maintains only epsilon parameters throughout the pipeline.")
-            print("\nTo continue the full iteration loop, you need to run the normal iteration driver")
-            print("which will handle copying epsilon_next.npy to the next iteration's epsilon.npy.")
+            
+            # Verify epsilon_next.npy was created by the reduce step
+            epsilon_next_path = obs_dir / "epsilon_next.npy"
+            if not epsilon_next_path.exists():
+                print(f"ERROR: epsilon_next.npy not found at {epsilon_next_path}")
+                print("The Newton update should have created this file.")
+                return
+            
+            # Verify phi_mean.npy exists for the update step
+            phi_mean_path = obs_dir / "phi_mean.npy"
+            if not phi_mean_path.exists():
+                print(f"ERROR: phi_mean.npy not found at {phi_mean_path}")
+                print("This file should be created by the simulation processing step.")
+                print("Make sure the simulation and processing workers completed successfully.")
+                return
+            
+            # Now run the update step to complete the iteration and set up the next one
+            print("\nRunning update step to complete the iteration...")
+            update_cmd = [
+                "python", str(proj_root / "bin" / "update_step.py"),
+                "--run-root", str(run_root),
+                "--iter", str(args.resume_iter),
+                "--config", str(Path(args.config).resolve())
+            ]
+            print("Running:", " ".join(update_cmd))
+            result = subprocess.run(update_cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print("Update step failed:")
+                print("STDOUT:", result.stdout)
+                print("STDERR:", result.stderr)
+                return
+            
+            print("Update step completed successfully!")
+            print("STDOUT:", result.stdout)
+            print("\n✅ Iteration", args.resume_iter, "completed successfully!")
+            print("The next iteration has been set up and should continue automatically via SLURM.")
             return
         elif args.resume_step == "update":
             # Special handling for update step resume
