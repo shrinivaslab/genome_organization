@@ -59,7 +59,7 @@ def main():
         obs_dir=str(iterd / "obs"),
         n_types=cfg["simulation"]["n_types"],
         monomer_types=str(Path(cfg["processing_inputs"]["monomer_types"]).resolve()),
-        interaction_matrix=str(eps_path),,
+        interaction_matrix=str(eps_path),
         run_replicates_array=str((bin_dir / "run_replicates_array.py").resolve()),
         series_runner=str((bin_dir / "series_runner.py").resolve()),
         per_task_reps=per_task,
