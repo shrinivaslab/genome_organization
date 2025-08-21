@@ -370,7 +370,19 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
 
     # Solve Δλ = -γ * B^{-1} g
     delta_vec = -np.linalg.solve(B_reg, g_mean)
-    delta_vec *= GAMMA
+    
+    # Parameter-dependent scaling: limit max change per parameter
+    max_change_per_param = 0.5
+    max_proposed_change = np.max(np.abs(delta_vec))
+    if max_proposed_change > 0:
+        adaptive_gamma = min(max_change_per_param / max_proposed_change, GAMMA)
+    else:
+        adaptive_gamma = GAMMA
+    
+    delta_vec *= adaptive_gamma
+    
+    print(f"[NEWTON] max_proposed_change: {max_proposed_change:.3f}")
+    print(f"[NEWTON] adaptive_gamma: {adaptive_gamma:.3f} (base_gamma: {GAMMA:.3f})")
 
     # Map to symmetric KxK
     iu = (iu_row, iu_col)
@@ -461,7 +473,10 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
         print(f"[WARNING] update_step.py may fail without phi_mean.npy")
 
     meta = {
-        "gamma": GAMMA,
+        "gamma_base": GAMMA,
+        "gamma_adaptive": float(adaptive_gamma),
+        "max_proposed_change": float(max_proposed_change),
+        "max_change_per_param": max_change_per_param,
         "lambda_reg": float(lambda_reg),
         "n_replicates": int(len(files)),
         "K": int(K),
@@ -473,7 +488,7 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
     }
     with open(os.path.join(output_dir, "reduce_summary.json"), "w") as f:
         json.dump(meta, f, indent=2)
-    print(f"[REDUCE] gamma={GAMMA:.2f}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
+    print(f"[REDUCE] gamma_base={GAMMA:.2f}, gamma_adaptive={adaptive_gamma:.3f}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
     print(f"[REDUCE] epsilon_old: {epsilon_old_path.name}")
     print(f"[REDUCE] epsilon_new: {save_path.name}")
     print(f"[REDUCE] epsilon_next: epsilon_next.npy")
