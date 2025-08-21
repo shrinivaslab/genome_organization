@@ -132,7 +132,7 @@ def process_one_replicate(positions, monomer_types, exp_Tkl_path, mu=MU_DEFAULT,
     )
     K = len(type_labels)
     Tkl_exp = _load_exp_Tkl(exp_Tkl_path, expected_K=K)
-    Delta = Tkl_sim - Tkl_exp
+    Delta = Tkl_exp - Tkl_sim
     delta_vec, _ = _flatten_upper(Delta)
     grad_vec = beta * delta_vec
     Hess_upper = (beta**2) * Cov_upper
