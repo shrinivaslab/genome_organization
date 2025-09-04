@@ -200,7 +200,7 @@ def main():
         cmd[1:1] = ["--qos", cfg["slurm"]["qos"]]
 
     print("[update] Submitting next iteration driver:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, cwd=run_root)
 
 if __name__ == "__main__":
     main()
