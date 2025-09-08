@@ -15,6 +15,7 @@ from pathlib import Path
 from functools import partial
 import multiprocessing as mp
 from scipy.spatial import cKDTree
+from scipy.linalg import cho_factor, cho_solve
 
 # ==========================
 # Constants / defaults
@@ -361,15 +362,33 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
     g_mean = grads.mean(axis=0)           # (M,)
     B_mean = Hlist.mean(axis=0)           # (M,M)
 
-    # Regularization
+    # Spectral conditioning to target condition number
     M = B_mean.shape[0]
-    lambda_reg = LAMBDA_REG_SCALE * (np.trace(B_mean) / max(M, 1))
-    if not np.isfinite(lambda_reg):
-        lambda_reg = 0.0
-    B_reg = B_mean + (lambda_reg * np.eye(M))
+    w = np.linalg.eigvalsh(B_mean)
+    lam_min, lam_max = w[0], w[-1]
+    kappa_raw = lam_max / max(abs(lam_min), 1e-12)
 
-    # Solve Δλ = -γ * B^{-1} g
-    delta_vec = -np.linalg.solve(B_reg, g_mean)
+    # Target condition number and floor for PSD
+    kappa_target = 1e4
+    eps_floor = 1e-5 * w.mean()
+
+    # Compute required damping
+    lam_psd = max(0.0, -lam_min + eps_floor)  # Ensure positive definite
+    if kappa_raw > kappa_target:
+        lam_kappa = max(0.0, (lam_max / kappa_target) - lam_min)
+    else:
+        lam_kappa = 0.0  # No conditioning needed
+
+    lambda_reg = max(lam_psd, lam_kappa)
+    B_reg = B_mean + lambda_reg * np.eye(M)
+
+    # Solve Δλ = -γ * B^{-1} g using Cholesky for numerical stability
+    try:
+        cho_fac = cho_factor(B_reg)
+        delta_vec = -cho_solve(cho_fac, g_mean)
+    except np.linalg.LinAlgError:
+        print("[WARNING] Cholesky failed, falling back to standard solve")
+        delta_vec = -np.linalg.solve(B_reg, g_mean)
     
     # Parameter-dependent scaling: limit max change per parameter
     max_change_per_param = 0.5
@@ -381,8 +400,13 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
     
     delta_vec *= adaptive_gamma
     
+    # Calculate final condition number after regularization
+    kappa_after = (lam_max + lambda_reg) / (abs(lam_min) + lambda_reg)
+    
     print(f"[NEWTON] max_proposed_change: {max_proposed_change:.3f}")
     print(f"[NEWTON] adaptive_gamma: {adaptive_gamma:.3f} (base_gamma: {GAMMA:.3f})")
+    print(f"[SPECTRAL] κ_raw: {kappa_raw:.2e}, λ_reg: {lambda_reg:.2e}, κ_after: {kappa_after:.2e}")
+    print(f"[SPECTRAL] eigenvalue range: [{lam_min:.2e}, {lam_max:.2e}]")
 
     # Map to symmetric KxK
     iu = (iu_row, iu_col)
@@ -485,6 +509,15 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
         "epsilon_next_path": str(epsilon_next_path),
         "B_trace": float(np.trace(B_mean)),
         "M": int(M),
+        "spectral_conditioning": {
+            "kappa_raw": float(kappa_raw),
+            "kappa_target": float(kappa_target),
+            "kappa_after": float(kappa_after),
+            "lambda_min": float(lam_min),
+            "lambda_max": float(lam_max),
+            "lambda_reg_spectral": float(lambda_reg),
+            "eps_floor": float(eps_floor)
+        }
     }
     with open(os.path.join(output_dir, "reduce_summary.json"), "w") as f:
         json.dump(meta, f, indent=2)
