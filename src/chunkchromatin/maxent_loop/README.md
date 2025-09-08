@@ -52,7 +52,43 @@ for **two consecutive** iterations.
 Upper-triangle order over type pairs (k≤l), row-major over K×K where K = `simulation.n_types`.
 This order must be consistent across your processor and `exp_targets/T_type_kl.npy`.
 
+### Spectral Conditioning (Numerical Stability)
+
+The Newton update uses **adaptive spectral conditioning** to prevent ill-conditioned Hessian matrices from causing optimization instability:
+
+- **Condition Number Monitoring**: Each iteration computes `κ(H) = λ_max / λ_min` via eigenvalue decomposition
+- **Target Conditioning**: When `κ(H) > 10⁴`, applies regularization to cap condition number at `κ_target = 10⁴`
+- **Adaptive Regularization**: `λ_reg = max(λ_psd, λ_kappa)` where:
+  - `λ_psd`: Ensures positive definiteness
+  - `λ_kappa`: Limits condition number to target value
+- **Cholesky Solver**: Uses `cho_factor/cho_solve` for numerical stability instead of general linear solve
+
+**Monitoring**: Look for `[SPECTRAL]` log entries showing:
+```
+[SPECTRAL] κ_raw: 1.14e+07, λ_reg: 4.12e+04, κ_after: 1.00e+04
+[SPECTRAL] eigenvalue range: [3.65e+01, 4.16e+08]
+```
+
+This prevents residual spikes that can occur when the Hessian becomes ill-conditioned near convergence.
+
+### Troubleshooting Optimization Issues
+
+**Residual Spikes**: If you see residuals suddenly increase (e.g., from 3,000 to 80,000+):
+- Check condition numbers in logs: `grep "SPECTRAL" /path/to/logs/*.out`
+- If `κ_raw > 10⁷`, the spectral conditioning should activate automatically
+- Consider resuming from the last stable iteration before the spike
+
+**Slow Convergence**: If optimization stalls with small parameter steps:
+- Check if condition number is consistently high (`κ_after ≈ 10⁴`)
+- Monitor eigenvalue ranges - very large `λ_max` indicates flat optimization landscape
+- Consider adjusting `κ_target` in `process_tkl_update.py` (try `1e3` for more aggressive conditioning)
+
+**Cholesky Failures**: If you see "Cholesky failed" warnings:
+- This indicates severe numerical issues beyond spectral conditioning
+- Check for NaN/Inf values in Hessian or gradient
+- Verify simulation outputs are reasonable
+
 ### Reproducibility
 - Seeds are fixed across iterations (`seeds.json`) and mapped `replicate_id → seed` deterministically.
-- Full parameter history is stored under each `iter_XXX/params/epsilon.npy` and versioned files in `iter_XXX/update/epsilon_tk_*.npy`. The interaction matrix is updated via Newton steps.
+- Full parameter history is stored under each `iter_XXX/params/epsilon.npy` and versioned files in `iter_XXX/update/epsilon_tk_*.npy`. The interaction matrix is updated via Newton steps with spectral conditioning.
 
