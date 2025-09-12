@@ -368,8 +368,13 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
     lam_min, lam_max = w[0], w[-1]
     kappa_raw = lam_max / max(abs(lam_min), 1e-12)
 
-    # Target condition number and floor for PSD
-    kappa_target = 1e4
+    # Adaptive target condition number based on severity of ill-conditioning
+    if kappa_raw > 1e7:
+        kappa_target = 5e2   # Very aggressive for extreme ill-conditioning
+    elif kappa_raw > 1e5:
+        kappa_target = 1e3   # Aggressive for severe ill-conditioning  
+    else:
+        kappa_target = 1e4   # Standard for mild ill-conditioning
     eps_floor = 1e-5 * w.mean()
 
     # Compute required damping
@@ -471,8 +476,9 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
             for fpath in files:
                 z = np.load(fpath)
                 grad_vec = z["grad_vec"] 
-                # Reconstruct simulated observables: phi_sim = (grad / beta) + T_exp
-                phi_sim = (grad_vec / beta) + T_exp_vec
+                # Reconstruct simulated observables: phi_sim = T_exp - (grad / beta)
+                # Since grad_vec = beta * (T_exp - T_sim), we have T_sim = T_exp - (grad_vec / beta)
+                phi_sim = T_exp_vec - (grad_vec / beta)
                 phi_sims.append(phi_sim)
             
             # Compute mean and save
