@@ -37,9 +37,11 @@ interaction_matrix_path = os.environ.get("MAXENT_INTERACTION_MATRIX")
 if not interaction_matrix_path:
     raise ValueError("MAXENT_INTERACTION_MATRIX environment variable not set")
 
-N = 3725
-density = 0.33
-chains = [(0,1570,False), (1570,2775,False), (2775,3725,False)]
+# Read simulation parameters from environment variables
+N = int(os.environ.get("MAXENT_N", "3725"))
+density = float(os.environ.get("MAXENT_DENSITY", "0.33"))
+chains_json = os.environ.get("MAXENT_CHAINS", "[[0, 1570, false], [1570, 2775, false], [2775, 3725, false]]")
+chains = [(start, end, is_ring) for start, end, is_ring in json.loads(chains_json)]
 monomer_types = np.load(monomer_types_path)
 interaction_matrix = np.load(interaction_matrix_path)
 forces_list = ['harmonic_bonds','angle_force','spherical_confinement','tanh_type_force','polynomial_repulsive']
