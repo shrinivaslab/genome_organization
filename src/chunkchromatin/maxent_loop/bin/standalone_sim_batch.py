@@ -138,6 +138,9 @@ def main():
         targets_npy=targets_dst,
         obs_dir=output_dir / "obs",  # Not used for standalone sim, but required by template
         n_types=cfg["simulation"]["n_types"],
+        N=cfg["simulation"]["N"],
+        density=cfg["simulation"]["density"],
+        chains=json.dumps(cfg["simulation"]["chains"]),
         monomer_types=cfg["processing_inputs"]["monomer_types"],
         interaction_matrix=interaction_dst,
         per_task_reps=per_task,
