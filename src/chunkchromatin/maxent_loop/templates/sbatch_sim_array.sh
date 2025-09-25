@@ -34,6 +34,7 @@ export MAXENT_OBS_DIR="{obs_dir}"
 export MAXENT_N_TYPES="{n_types}"
 export MAXENT_N="{N}"
 export MAXENT_DENSITY="{density}"
+export MAXENT_INITIALIZATION_METHOD="{initialization_method}"
 export MAXENT_CHAINS='{chains}'
 export MAXENT_MONOMER_TYPES="{monomer_types}"
 export MAXENT_INTERACTION_MATRIX="{interaction_matrix}"

@@ -14,7 +14,7 @@ from chunkchromatin.simulation import Simulation, EKExceedsError
 from chunkchromatin.chromosome import Chromosome
 from chunkchromatin.lamina import Lamina
 from chunkchromatin.binaryReporter import BinaryReporter
-from polykit.polykit.generators.initial_conformations import create_random_walk
+from polykit.polykit.generators.initial_conformations import create_random_walk, grow_cubic
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--replicate_id", type=int, required=True)
@@ -42,6 +42,7 @@ N = int(os.environ.get("MAXENT_N", "3725"))
 density = float(os.environ.get("MAXENT_DENSITY", "0.33"))
 chains_json = os.environ.get("MAXENT_CHAINS", "[[0, 1570, false], [1570, 2775, false], [2775, 3725, false]]")
 chains = [(start, end, is_ring) for start, end, is_ring in json.loads(chains_json)]
+initialization_method = os.environ.get("MAXENT_INITIALIZATION_METHOD", "random_walk")
 monomer_types = np.load(monomer_types_path)
 interaction_matrix = np.load(interaction_matrix_path)
 forces_list = ['harmonic_bonds','angle_force','spherical_confinement','tanh_type_force','polynomial_repulsive']
@@ -66,14 +67,22 @@ metadata = {
     "force_list": forces_list,
     "interaction_matrix": interaction_matrix.tolist(),
     "monomer_types_path": monomer_types_path,
-    "random_seed": int(seed)
+    "random_seed": int(seed),
+    "initialization_method": initialization_method
 }
 
 traj_path = os.path.join(out_dir, "trajectory.traj")
 start_time = time.time()
 
 
-monomer_positions = create_random_walk(step_size=1, N=N)
+# Initialize monomer positions based on the chosen method
+if initialization_method == "random_walk":
+    monomer_positions = create_random_walk(step_size=1, N=N)
+elif initialization_method == "grow_cubic":
+    box_size = int(box_length)  # Convert to integer for cubic lattice
+    monomer_positions = grow_cubic(N=N, boxSize=box_size, method='linear')
+else:
+    raise ValueError(f"Unknown initialization method: {initialization_method}. Supported methods: 'random_walk', 'grow_cubic'")
 with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metadata) as reporter:
 
     # === EQUILIBRATION ===

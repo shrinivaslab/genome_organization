@@ -94,6 +94,7 @@ def main():
         "burnin_frames": cfg["simulation"]["burnin_frames"],
         "save_frames": cfg["simulation"]["save_frames"],
         "n_types": cfg["simulation"]["n_types"],
+        "initialization_method": cfg["simulation"].get("initialization_method", "random_walk"),
     }
     write_json(output_dir / "run_manifest.json", manifest)
     
@@ -140,6 +141,7 @@ def main():
         n_types=cfg["simulation"]["n_types"],
         N=cfg["simulation"]["N"],
         density=cfg["simulation"]["density"],
+        initialization_method=cfg["simulation"].get("initialization_method", "random_walk"),
         chains=json.dumps(cfg["simulation"]["chains"]),
         monomer_types=cfg["processing_inputs"]["monomer_types"],
         interaction_matrix=interaction_dst,
