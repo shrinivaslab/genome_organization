@@ -1,4 +1,4 @@
 # Ignore Python bytecode
 __pycache__/
 *.pyc
-src/chunkchromatin/maxent_loop/config.yaml
+src/chunkchromatin/maxent_loop/*.yaml

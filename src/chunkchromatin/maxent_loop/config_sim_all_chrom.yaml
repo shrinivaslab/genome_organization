@@ -64,7 +64,7 @@ convergence:
 
 # Inputs processing script expects:
 processing_inputs:
-  monomer_types: "/gpfs/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr4.npy"
+  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_monomer_types_chr1_to_chr19.npy"
   exp_tkl:       "/gpfs/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/Tkl_exp_interpolated_chr4.npy"
   interaction_matrix: "/gpfs/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/interaction_matrix.npy"
 
@@ -87,11 +87,11 @@ exp_targets:
 # ------------------------------
 resources:
   simulation:
-    array_len: 5
-    per_task_replicates: 10
-    time_limit: "4:00:00"
+    array_len: 10
+    per_task_replicates: 5
+    time_limit: "8:00:00"
     cpus_per_task: 1
-    mem: "5G"
+    mem: "10G"
     # GPU-specific settings for simulation jobs
     partition: "gengpu"        # override global partition for simulations
     gres: "gpu:a100:1"         # GPU resource allocation
