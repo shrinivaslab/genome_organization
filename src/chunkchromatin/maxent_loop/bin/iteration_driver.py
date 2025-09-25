@@ -60,6 +60,7 @@ def main():
         n_types=cfg["simulation"]["n_types"],
         N=cfg["simulation"]["N"],
         density=cfg["simulation"]["density"],
+        initialization_method=cfg["simulation"].get("initialization_method", "random_walk"),
         chains=json.dumps(cfg["simulation"]["chains"]),
         monomer_types=str(Path(cfg["processing_inputs"]["monomer_types"]).resolve()),
         interaction_matrix=str(eps_path),
