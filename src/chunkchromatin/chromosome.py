@@ -437,8 +437,108 @@ class Chromosome(object):
 
         return force
 
-
-
+    def add_ideal_chromosome_force(
+        self,
+        sim_object,
+        lambda_IC,
+        d_init=3,
+        d_end=300,
+        mu=4.22,
+        rc=1.82,
+        rCutoff=3.0,
+        name="ideal_chromosome_force"
+    ):
+        """
+        Ideal chromosome potential: enforces contact probability vs genomic distance.
+        
+        Energy: E = sum_{d=d_init}^{d_end-1} [lambda_IC[d] * sum_i f(r_{i,i+d})]
+        where f(r) = 0.5 * (1 + tanh(mu * (rc - r)))
+        
+        This potential applies the tanh distance kernel only to pairs (i, j) where
+        d = |j - i| is the genomic distance (sequence separation) between monomers.
+        
+        Based on the reference implementation using CustomNonbondedForce with
+        Discrete1DFunction for tabulated lambda_IC values.
+        
+        Parameters
+        ----------
+        sim_object : Simulation
+            Must have attributes: N (int), conlen (float), kT (float).
+        lambda_IC : ndarray
+            1D array of Lagrange multipliers for each genomic distance.
+            Shape: (dmax,) where dmax = d_end - d_init.
+            lambda_IC[i] corresponds to genomic distance (i + d_init).
+        d_init : int
+            Minimum genomic distance to consider (in bins, default 3).
+        d_end : int
+            Maximum genomic distance to consider (in bins, default 300).
+        mu : float
+            Tanh kernel parameter (default 4.22).
+        rc : float
+            Tanh kernel parameter (default 1.82).
+        rCutoff : float
+            Cutoff distance in reduced units (default 3.0).
+        name : str
+            Name for the force.
+        
+        Returns
+        -------
+        CustomNonbondedForce
+            The ideal chromosome potential as a CustomNonbondedForce.
+        """
+        dmax = d_end - d_init
+        if len(lambda_IC) != dmax:
+            raise ValueError(f"lambda_IC length ({len(lambda_IC)}) must equal dmax ({dmax})")
+        
+        # Build energy expression matching reference implementation
+        # Energy: step(d-dinit)*IClist(d)*step(dend-d)*f*step(r-lim)
+        # where d = abs(idx2-idx1), f = 0.5*(1 + tanh(mu*(rc - r)))
+        energy_expr = (
+            "step(d-dinit)*IClist(d)*step(dend-d)*f*step(r-lim);"
+            "f=0.5*(1. + tanh(mu*(rc - r)));"
+            "d=abs(idx2-idx1)"
+        )
+        
+        force = mm.CustomNonbondedForce(energy_expr)
+        force.setForceGroup(4)  # Use force group 4 for IC
+        force.name = name
+        force.setCutoffDistance(rCutoff * sim_object.conlen)
+        force.setNonbondedMethod(mm.CustomNonbondedForce.CutoffNonPeriodic)
+        
+        # Prepare IClist array: pad with zeros for d < d_init, then lambda_IC values
+        # Reference: IClist = np.append(np.zeros(dinit), IClist_listfromfile)[:-dinit]
+        # But we want IClist[d] to return lambda_IC[d - d_init] for d in [d_init, d_end)
+        # So we create an array of length d_end where:
+        #   IClist[d] = 0 for d < d_init
+        #   IClist[d] = lambda_IC[d - d_init] for d in [d_init, d_end)
+        #   IClist[d] = 0 for d >= d_end (but we gate with step(dend-d) anyway)
+        IClist_array = np.zeros(d_end, dtype=float)
+        for d_idx, d in enumerate(range(d_init, d_end)):
+            IClist_array[d] = lambda_IC[d_idx]
+        
+        # Convert to kJ/mol units
+        kT_kJmol = sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
+        IClist_array = IClist_array * kT_kJmol
+        
+        # Create tabulated function
+        tabIClist = mm.Discrete1DFunction(IClist_array.tolist())
+        force.addTabulatedFunction('IClist', tabIClist)
+        
+        # Global parameters
+        force.addGlobalParameter('dinit', float(d_init))
+        force.addGlobalParameter('dend', float(d_end))
+        force.addGlobalParameter('mu', float(mu))
+        force.addGlobalParameter('rc', float(rc))
+        force.addGlobalParameter('lim', 1.0)  # Minimum distance cutoff
+        
+        # Per-particle parameter for index
+        force.addPerParticleParameter("idx")
+        
+        # Add all particles with their index
+        for i in range(sim_object.N):
+            force.addParticle([float(i)])
+        
+        return force
 
     @staticmethod
     def _generate_bonds(sim_object, chains, extra_bonds=None):
