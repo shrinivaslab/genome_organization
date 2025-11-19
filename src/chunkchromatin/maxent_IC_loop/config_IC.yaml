@@ -1,0 +1,134 @@
+# MaxEnt IC loop configuration
+# Edit values as needed, but do not change keys.
+
+# SLURM settings (global defaults; can be overridden per-stage in `resources`)
+slurm:
+  account: "p32733"
+  partition: "short"          # default partition for processing/update jobs
+  time_limit: "4:00:00"
+  cpus_per_task: 7
+  mem: "25G"
+  constraint: null
+  qos: null
+
+# Simulation settings (model + loop constants)
+simulation:
+  n_replicates: 50          # logical number of replicates per iteration
+  frames: 4000              # frames per replicate
+  burnin_frames: 400        # cold-start frames to discard in analysis
+  save_frames: true         # if your runner supports streaming, set false to minimize I/O
+  seeds_base: 177013        # derive 50 fixed seeds from this base
+  n_types: 5                # number of chromatin types (K)
+  density: 0.33             # density for box length calculation
+  N: 24675                   # total number of monomers in the system
+  chains:                   # chain definitions [(start, end, is_ring), ...]
+    - [0, 1955, false]      # chromosome 1
+    - [1955, 3780, false]      # chromosome 2
+    - [3780, 5385, false]      # chromosome 3
+    - [5385, 6955, false]      # chromosome 4
+    - [6955, 8475, false]      # chromosome 5
+    - [8475, 9975, false]      # chromosome 6
+    - [9975, 11430, false]      # chromosome 7
+    - [11430, 12725, false]      # chromosome 8
+    - [12725, 13975, false]      # chromosome 9
+    - [13975, 15285, false]      # chromosome 10
+    - [15285, 16510, false]      # chromosome 11
+    - [16510, 17715, false]      # chromosome 12
+    - [17715, 18920, false]      # chromosome 13
+    - [18920, 20170, false]      # chromosome 14
+    - [20170, 21215, false]      # chromosome 15
+    - [21215, 22200, false]      # chromosome 16
+    - [22200, 23150, false]      # chromosome 17
+    - [23150, 24060, false]      # chromosome 18
+    - [24060, 24675, false]      # chromosome 19
+  initialization_method: "territory_rw"  # "random_walk" or "grow_cubic"
+
+# Ideal Chromosome (IC) specific settings
+ideal_chromosome:
+  d_init: 3          # minimum genomic distance (bins)
+  d_end: 300         # maximum genomic distance (bins)
+  # dmax = d_end - d_init = 297
+
+# Force parameters (optional, uses defaults if not specified)
+# Customize force parameters here; omit any force to use defaults from run_replicates_array.py
+force_kwargs:
+  harmonic_bonds:
+    bondWiggleDistance: 0.10  # (σ units)
+    bondLength: 1.0
+  angle_force:
+    k: 2.0                    # in kT/rad^2
+    theta_0: 3.141592653589793  # np.pi
+  spherical_confinement:
+    r: "density"
+    density: 0.10
+    k: 1.5                    # softer than 5.0
+    center: [0.0, 0.0, 0.0]
+    invert: false
+    particles: null
+    name: "spherical_confinement"
+  polynomial_repulsive:
+    trunc: 3                  # energy cap at r→0 in kT
+    radiusMult: 1
+    name: "polynomial_repulsive"
+
+# Learning-rate & update
+update:
+  eta_init: 1.0e-3
+  eta_min: 1.0e-6
+  eta_max: 5.0e-1
+  precond_eps: 1.0e-8
+  bb_clip_fraction: 0.25
+
+# Convergence (stop if true for N consecutive iterations)
+convergence:
+  max_abs_residual: 1.0e-3
+  l2_residual: 5.0e-3
+  max_param_step: 1.0e-4
+  consecutive: 2
+
+# Inputs processing script expects:
+processing_inputs:
+  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr1_to_chr19.npy"
+  # Path to epsilon.npy from type-type maxent loop (fixed, not optimized)
+  epsilon: "/path/to/epsilon.npy"
+  # Path to experimental phi_exp_IC observable
+  exp_phi_IC: "/path/to/phi_exp_IC.npy"
+  # Optional: kernel parameters for IC observable computation
+  kernel_flags:
+    mu:   4.22
+    rc:   1.82
+    rcut: 3.0
+    beta: 1.0
+
+# Pinned kernel and experimental target vector
+exp_targets:
+  phi_exp_IC_npy: "/path/to/phi_exp_IC.npy"
+
+# ------------------------------
+# stage-specific resources
+# ------------------------------
+resources:
+  simulation:
+    array_len: 5
+    per_task_replicates: 10
+    time_limit: "8:00:00"
+    cpus_per_task: 1
+    mem: "16G"
+    # GPU-specific settings for simulation jobs
+    partition: "gengpu"        # override global partition for simulations
+    gres: "gpu:a100:1"         # GPU resource allocation
+  processing:
+    workers:
+      array_len: 8
+      time_limit: "4:00:00"
+      cpus_per_task: 7
+      mem: "48G"
+      io_k: 2         # exported as MAXENT_IO_K and passed as --io-k
+    reduce:
+      time_limit: "1:00:00"
+      cpus_per_task: 1
+      mem: "20G"
+      # Where to write updated parameters if your reducer does that;
+      # if omitted, we default to {iter_dir}/update
+      alpha_dir: null
+
