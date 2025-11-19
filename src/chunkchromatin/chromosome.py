@@ -94,7 +94,7 @@ class Chromosome(object):
             for idx1, idx2 in self.bond_list:
                 bond_force.addBond(int(idx1), int(idx2), r0, k_openmm)
             return bond_force
-    
+
     def add_angle_force(self, k=1.5, theta_0=np.pi, force_group=1, override_checks=False):
         """
         Add harmonic angle force: U(θ) = 0.5 * k * (θ - θ₀)² for each triplet.
@@ -120,13 +120,14 @@ class Chromosome(object):
         k_array = self._to_array_1d(k, len(self.triplet_list))
         theta_array = self._to_array_1d(theta_0, len(self.triplet_list))
 
-        # Convert k from kT/rad² to kJ/mol/rad²
+        # Convert k from (kT/rad²) to (kJ/mol/rad²)
         k_openmm = k_array * self.sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
 
-        energy = "kT * angK * 0.5 * (theta - angT0)^2"
+        # No extra kT here — 'angK' carries kJ/mol already
+        energy = "0.5 * angK * (theta - angT0)^2"
         angle_force = mm.CustomAngleForce(energy)
         angle_force.setForceGroup(force_group)
-        self._add_global_parameter(angle_force, "kT", self.sim_object.kT)
+        # per-angle parameters
         angle_force.addPerAngleParameter("angK")
         angle_force.addPerAngleParameter("angT0")
 
@@ -374,6 +375,7 @@ class Chromosome(object):
         ):
         """
         OpenMiChroM-style type–type interaction using the tanh distance kernel.
+        units are kT
 
         Pair energy:
             U_ij = lambda_tanh * f(r; mu, rc) * alpha_{type_i, type_j}
@@ -423,9 +425,10 @@ class Chromosome(object):
         self._add_global_parameter(force, "rc", float(rc))
         self._add_global_parameter(force, "rcutoff", rCutoff)
 
+        kT_kJmol = sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
         # Alpha parameters per interacting type pair
         for (i, j) in indexpairs:
-            self._add_global_parameter(force, f"ALPHA_{i}_{j}", float(interaction_matrix[i, j]))
+            self._add_global_parameter(force, f"ALPHA_{i}_{j}", float(interaction_matrix[i, j]) * kT_kJmol)
 
         # Per-particle 'type' parameter
         force.addPerParticleParameter("type")

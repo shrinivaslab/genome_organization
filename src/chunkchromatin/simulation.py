@@ -1,3 +1,31 @@
+# -----------------------------------------------------------------------------
+# simulation.pys
+# -----------------------------------------------------------------------------
+# Units & conventions (read me):
+# -----------------------------------------------------------------------------
+# OpenMM is run in PHYSICAL units using its Quantity system.
+# - Positions/velocities/timestep/temperature are carried with units
+#   (nanometer, picosecond, kelvin, etc.) inside the integrator/context.
+#
+# What we store / report:
+# - Trajectory frames written via the reporter are plain NumPy float32
+#   positions in **nanometers** (we convert from Quantity -> nm -> np.float32).
+# - Energies printed during the run (`potentialEnergy`, `kineticEnergy`) are
+#   normalized to **kT per particle** for convenience in reduced-unit thinking.
+# - The detailed breakdown from `get_energy_breakdown()` is left in **kJ/mol**
+#   (OpenMM’s native energy unit) to preserve fidelity and avoid double scaling.
+#
+# Reduced-unit interpretation:
+# - The model is conceptually “reduced” (σ ≈ 1, ε ≈ kT), but the engine runs
+#   in physical units. If you need pure reduced coordinates, divide stored
+#   positions by your σ (in nm). Likewise, divide energies by kT for kT units.
+#
+# Bottom line:
+# - Inside OpenMM: physical units (Quantity).
+# - On disk: positions = nm (float32); optional per-force energies = kJ/mol JSON.
+# - On logs: eK/eP reported as kT/particle.
+# ----------------------------------------------------------------------------- 
+
 import logging
 import time
 from openmm import unit
@@ -36,6 +64,10 @@ class Simulation(object):
         self.block = 0
         self.time = 0
 
+        #add force groups
+        self._force_names = []      # parallel to groups
+        self._force_groups = []     # integers 0..31
+
         self.create_system_object()
         self.create_integrator_object()
         self.create_platform_object()
@@ -68,14 +100,65 @@ class Simulation(object):
         velocities_quantity = unit.Quantity(velocities, unit.nanometer / unit.picosecond)
         self.context.setVelocities(velocities_quantity)
 
-    def add_force(self, force):
-        return self.system.addForce(force)
+    def add_force(self, force, name=None):
+        """
+        Add a Force to the System, assign it a unique force group, and remember its name.
+        Returns the index from System.addForce (unchanged behavior).
+        """
+        # Next group index (0..31). OpenMM supports up to 32 groups.
+        next_group = len(self._force_groups)
+        if next_group >= 32:
+            raise ValueError("OpenMM supports at most 32 force groups; already have 32.")
+
+        # Assign the group and add to system
+        force.setForceGroup(next_group)
+        idx = self.system.addForce(force)
+
+        # Record metadata
+        force_name = name if name is not None else f"force_{next_group}"
+        self._force_names.append(force_name)
+        self._force_groups.append(next_group)
+        return idx
+
+    def get_energy_breakdown(self):
+        """
+        Returns a dict with:
+        - 'potential_total_kJmol'
+        - 'kinetic_total_kJmol'
+        - 'potential_by_force_kJmol' : {force_name: value, ...}
+        Notes:
+        * Kinetic energy is system-wide (not split by group).
+        * Potential components are obtained by querying each force group.
+        """
+        if not hasattr(self, 'context'):
+            raise RuntimeError("Context has not been created.")
+
+        # Total energies
+        state_all = self.context.getState(getEnergy=True)
+        pot_total = state_all.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+        kin_total = state_all.getKineticEnergy().value_in_unit(unit.kilojoule_per_mole)
+
+        # Per-group potentials
+        per_force = {}
+        for name, grp in zip(self._force_names, self._force_groups):
+            mask = (1 << grp)
+            state_grp = self.context.getState(getEnergy=True, groups=mask)
+            e_grp = state_grp.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+            per_force[name] = e_grp
+
+        return {
+            "potential_total_kJmol": pot_total,
+            "kinetic_total_kJmol": kin_total,
+            "potential_by_force_kJmol": per_force,
+        }
+
 
     def run_simulation_block(
         self,
         steps=None,
         check_functions=[],
         get_velocities=False,
+        get_energies=False,       # <-- new argument
         save=True,
         save_extras={},
     ):
@@ -128,28 +211,38 @@ class Simulation(object):
         if check_fail:
             raise RuntimeError("Custom checks failed")
 
+        # Base result dict
         result = {
-            "pos": coords,
+            "pos": coords_nm,
             "potentialEnergy": eP,
             "kineticEnergy": eK,
             "time": curtime_ns,
             "block": self.block,
         }
 
+        # Optionally add velocities
         if get_velocities:
             velocities = self.state.getVelocities(asNumpy=True)
             result["vel"] = velocities.value_in_unit(unit.nanometer / unit.picosecond)
 
+        # Optionally add detailed energy breakdown
+        if get_energies:
+            result["energy_breakdown"] = self.get_energy_breakdown()
+
+        # Merge in any additional user-provided data
         result.update(save_extras)
 
+        # Save via reporter if enabled
         if self.reporter is not None and save:
             self._dispatch_report(result)
 
+        # Update counters
         self.block += 1
         self.step += steps
         self.time = curtime_ns
 
         return result
+
 
     def get_positions(self, as_numpy=True, in_units=unit.nanometer):
         if not hasattr(self, "context"):
@@ -171,7 +264,7 @@ class Simulation(object):
             }
             self.reporter.report("initArgs", init_args)
             if self.positions is not None:
-                self.reporter.report("starting_conformation", {"pos": self.positions})
+                self.reporter.report("starting_conformation", {"pos": self.positions.value_in_unit(unit.nanometer)})
 
     def print_stats(self):
         if not hasattr(self, 'state'):
@@ -230,10 +323,8 @@ class Simulation(object):
             raise AttributeError("Reporter must have a callable 'report' method")
 
         try:
-            if isinstance(result, dict) and "pos" in result:
-                report_fn(result["pos"])
-            else:
-                report_fn(result)
+            # Always pass dicts through so energies (if present) are preserved
+            report_fn(result)
         except TypeError:
             try:
                 report_fn("data", result)
