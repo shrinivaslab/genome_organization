@@ -7,7 +7,6 @@ from chunkchromatin.maxent_IC_loop.bin.utils import ensure_dir, write_json, load
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-root", required=True, help="Root directory for this run")
-    ap.add_argument("--initial-epsilon", required=True, help="Path to KxK epsilon matrix .npy (from type-type loop)")
     ap.add_argument("--name", required=True, help="Short run name used in job names")
     ap.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config_IC.yaml"))
     args = ap.parse_args()
@@ -58,7 +57,10 @@ def main():
     ensure_dir(iter0 / "update")
 
     # Copy initial epsilon (fixed, from type-type loop)
-    eps0_src = Path(args.initial_epsilon).resolve()
+    epsilon_path = cfg["processing_inputs"].get("epsilon")
+    if epsilon_path is None:
+        raise ValueError("config.processing_inputs.epsilon must be set to the fixed KxK epsilon .npy path")
+    eps0_src = Path(epsilon_path).resolve()
     eps0_dst = iter0 / "params" / "epsilon.npy"
     shutil.copy2(eps0_src, eps0_dst)
     
