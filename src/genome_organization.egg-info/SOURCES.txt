@@ -5,9 +5,13 @@ src/chunkchromatin/binaryReporter.py
 src/chunkchromatin/chromosome.py
 src/chunkchromatin/condensate.py
 src/chunkchromatin/hdf5_format.py
+src/chunkchromatin/initialization.py
 src/chunkchromatin/lamina.py
 src/chunkchromatin/maxEnt.py
 src/chunkchromatin/simulation.py
+src/chunkchromatin/difftre/jax_U_calc.py
+src/chunkchromatin/difftre/openmm_energy_benchmark.py
+src/chunkchromatin/difftre/test_build.py
 src/chunkchromatin/maxent_loop/bin/analyze_residuals.py
 src/chunkchromatin/maxent_loop/bin/dry_run.py
 src/chunkchromatin/maxent_loop/bin/iteration_driver.py

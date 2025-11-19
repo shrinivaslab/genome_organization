@@ -68,6 +68,64 @@ def _flatten_upper(M):
     iu = np.triu_indices(M.shape[0])
     return M[iu], iu
 
+def _compute_monomer_contact_matrix(positions, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None):
+    """
+    Compute average N×N monomer-level contact matrix across all frames.
+    Returns: (F, N, N) array where F is number of frames, N is number of monomers.
+    """
+    F, N, _ = positions.shape
+    if rcut is None:
+        rcut = rc + 4.0 / mu
+    
+    # Store per-frame contact matrices for covariance calculation
+    contact_matrices = np.zeros((F, N, N), dtype=np.float64)
+    
+    for f in range(F):
+        X = positions[f]
+        tree = cKDTree(X, leafsize=40)
+        pairs = tree.query_pairs(rcut, output_type='ndarray')
+        
+        if pairs.size != 0:
+            i = pairs[:, 0]
+            j = pairs[:, 1]
+            rij = np.linalg.norm(X[i] - X[j], axis=1)
+            fij = f_switch(rij, mu=mu, rc=rc)
+            
+            # Fill symmetric matrix
+            contact_matrices[f, i, j] = fij
+            contact_matrices[f, j, i] = fij
+    
+    return contact_matrices
+
+def _block_sum_and_normalize(matrix, block_size=5):
+    """
+    Block-sum matrix with blocks of size block_size × block_size,
+    then normalize each row by its maximum value.
+    
+    Args:
+        matrix: (N, N) array at 100kb resolution
+        block_size: number of bins to sum (default 5 for 100kb -> 500kb)
+    
+    Returns:
+        (N//block_size, N//block_size) array normalized by row maxima
+    """
+    N = matrix.shape[0]
+    N_new = N // block_size
+    
+    # Truncate to evenly divisible size
+    N_trunc = N_new * block_size
+    matrix_trunc = matrix[:N_trunc, :N_trunc]
+    
+    # Reshape and sum over blocks: (N_new, block_size, N_new, block_size) -> (N_new, N_new)
+    matrix_blocked = matrix_trunc.reshape(N_new, block_size, N_new, block_size).sum(axis=(1, 3))
+    
+    # Normalize each row by its maximum
+    row_maxes = matrix_blocked.max(axis=1, keepdims=True)
+    row_maxes = np.where(row_maxes > 0, row_maxes, 1.0)  # Avoid division by zero
+    matrix_normalized = matrix_blocked / row_maxes
+    
+    return matrix_normalized
+
 class UpperTriOnlineCov:
     """Online mean/covariance over the vectorized upper-tri entries (incl diag)."""
     def __init__(self, K):
@@ -127,27 +185,231 @@ def _covariance_pass_upper(positions, monomer_types, mu=MU_DEFAULT, rc=RC_DEFAUL
 
     return acc.finalize(beta=1.0) + (type_labels,)
 
-def process_one_replicate(positions, monomer_types, exp_Tkl_path, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=RCUT_DEFAULT, beta=BETA_DEFAULT):
-    Tkl_sim, Cov_upper, Hess_upper, iu, type_labels = _covariance_pass_upper(
-        positions, monomer_types, mu=mu, rc=rc, rcut=rcut
-    )
+def _covariance_pass_upper_500kb(
+    positions,
+    monomer_types,
+    mu=MU_DEFAULT,
+    rc=RC_DEFAULT,
+    rcut=None,
+    block_size=5,
+):
+    """
+    Compute type-type observables at 500kb resolution:
+
+    1. Use monomer-level positions (100kb beads) and the same distance kernel f_switch
+       to compute contact probabilities.
+    2. Block-sum the monomer contacts in 5x5 blocks to obtain a 500kb contact matrix.
+    3. Normalize each 500kb-row by its maximum (Hi-C style).
+    4. Aggregate the normalized 500kb contact matrix by chromatin type of the 500kb bins
+       to obtain a KxK Tkl for each frame.
+    5. Use UpperTriOnlineCov over the KxK upper triangle, exactly as in the 100kb case.
+
+    Returns
+    -------
+    Tkl_mean : (K, K) float
+        Mean type-type observable at 500kb.
+    Cov_upper : (M, M) float
+        Covariance over the flattened upper triangle (M = K*(K+1)//2).
+    Hess_upper : (M, M) float
+        Same as Cov_upper initially; caller rescales by beta^2.
+    iu : tuple of arrays
+        Indices of the upper triangle (k,l) with k <= l.
+    type_labels : (K,) array
+        Sorted unique chromatin type labels at 500kb (downsampled).
+    N_500kb : int
+        Number of 500kb bins (N_monomers // block_size).
+    """
+    F, N, _ = positions.shape
+    if rcut is None:
+        rcut = rc + 4.0 / mu
+
+    # 500kb binning along the chain
+    N_500 = N // block_size
+    if N_500 * block_size != N:
+        # Truncate monomer_types and positions to a multiple of block_size
+        N_trunc = N_500 * block_size
+        positions = positions[:, :N_trunc, :]
+        monomer_types = monomer_types[:N_trunc]
+
+    # Downsample monomer types: take every 5th monomer as the "500kb bead" type
+    monomer_types_500 = monomer_types[::block_size]
+    type_labels, inv_500 = np.unique(monomer_types_500, return_inverse=True)
     K = len(type_labels)
-    Tkl_exp = _load_exp_Tkl(exp_Tkl_path, expected_K=K)
-    Delta = Tkl_exp - Tkl_sim
-    delta_vec, _ = _flatten_upper(Delta)
-    grad_vec = beta * delta_vec
-    Hess_upper = (beta**2) * Cov_upper
-    return {
-        "type_labels": type_labels,
-        "Tkl_sim": Tkl_sim,
-        "Tkl_exp": Tkl_exp,
-        "Delta": Delta,
-        "upper_indices": iu,
-        "grad_vec": grad_vec,
-        "Hess_upper": Hess_upper,
-        "Cov_upper": Cov_upper,
-        "mu": mu, "rc": rc, "rcut": rcut if rcut is not None else rc + 4.0/mu
-    }
+
+    acc = UpperTriOnlineCov(K)
+    iuK = np.triu_indices(K)
+
+    for f in range(F):
+        X = positions[f]
+        tree = cKDTree(X, leafsize=40)
+        pairs = tree.query_pairs(rcut, output_type='ndarray')
+
+        # Build 500kb contact matrix for this frame by block-summing monomer contacts
+        B = np.zeros((N_500, N_500), dtype=np.float64)
+
+        if pairs.size != 0:
+            i = pairs[:, 0]
+            j = pairs[:, 1]
+            rij = np.linalg.norm(X[i] - X[j], axis=1)
+            fij = f_switch(rij, mu=mu, rc=rc)
+
+            # Map monomer indices -> 500kb bin indices
+            bi = i // block_size
+            bj = j // block_size
+
+            # Accumulate into a dense 500kb matrix (upper triangle)
+            flat_ij = bi * N_500 + bj
+            sums = np.bincount(flat_ij, weights=fij, minlength=N_500 * N_500)
+            sums = sums.reshape(N_500, N_500)
+
+            # Symmetrize: we only had i<j pairs originally
+            B = sums + sums.T
+            # Do not double count diagonal contributions
+            diag_idx = np.diag_indices(N_500)
+            B[diag_idx] = sums[diag_idx]
+
+        # Row-normalize so each row's max is 1 (if any contacts exist)
+        row_max = B.max(axis=1, keepdims=True)
+        row_max = np.where(row_max > 0.0, row_max, 1.0)
+        B_norm = B / row_max
+
+        # Aggregate 500kb contact probabilities into KxK type-type observables
+        T_frame = np.zeros((K, K), dtype=np.float64)
+
+        # We want to sum B_norm[I,J] for all I,J belonging to type pairs (k,l).
+        # Do it in one shot with bincount over the upper triangle of 500kb bins.
+        I_bins, J_bins = np.triu_indices(N_500)
+        if I_bins.size != 0:
+            weights = B_norm[I_bins, J_bins].ravel()
+            tI = inv_500[I_bins]
+            tJ = inv_500[J_bins]
+            k = np.minimum(tI, tJ)
+            l = np.maximum(tI, tJ)
+            flat_types = k * K + l
+            sums_types = np.bincount(
+                flat_types,
+                weights=weights,
+                minlength=K * K
+            ).reshape(K, K)
+            T_frame[iuK] = sums_types[iuK]
+
+        acc.add_frame_from_upper_mat(T_frame)
+
+    Tkl_mean, Cov_upper, Hess_upper, iu = acc.finalize(beta=1.0)
+    return Tkl_mean, Cov_upper, Hess_upper, iu, type_labels, N_500
+
+
+def process_one_replicate(
+    positions,
+    monomer_types,
+    exp_Tkl_path,
+    mu=MU_DEFAULT,
+    rc=RC_DEFAULT,
+    rcut=RCUT_DEFAULT,
+    beta=BETA_DEFAULT,
+    resolution=None,
+):
+    """
+    Process one replicate to compute gradients and Hessian.
+
+    Parameters
+    ----------
+    positions : (F, N, 3) array
+        Trajectory in reduced units.
+    monomer_types : (N,) array
+        Integer chromatin type labels at 100kb resolution.
+    exp_Tkl_path : str
+        Path to experimental Tkl target (K x K) at the chosen resolution
+        (100kb or 500kb), aggregated by chromatin type.
+    mu, rc, rcut, beta : float
+        Parameters for the distance kernel and MaxEnt.
+    resolution : None or "500kb"
+        If None:
+            Use the standard 100kb observable definition:
+            - distances → f_switch → sum by chromatin type (100kb).
+        If "500kb":
+            Use 500kb Hi-C bin observables:
+            - distances → f_switch at 100kb
+            - block-sum 5x5 to 500kb
+            - row-normalize per 500kb row
+            - sum by chromatin type of 500kb bins.
+
+    Returns
+    -------
+    dict with keys:
+        type_labels, Tkl_sim, Tkl_exp, Delta,
+        upper_indices, grad_vec, Hess_upper, Cov_upper,
+        mu, rc, rcut, resolution, (and N_500kb for 500kb mode).
+    """
+    if resolution == "500kb":
+        # 500kb: coarse-grain monomer contacts to 500kb bins, normalize, then
+        # compute type-type observable exactly as in 100kb case.
+        Tkl_sim, Cov_upper, Hess_upper, iu, type_labels, N_500 = _covariance_pass_upper_500kb(
+            positions,
+            monomer_types,
+            mu=mu,
+            rc=rc,
+            rcut=rcut,
+            block_size=5,
+        )
+        K = len(type_labels)
+
+        # Experimental target should already be the type-type Tkl at 500kb
+        Tkl_exp = _load_exp_Tkl(exp_Tkl_path, expected_K=K)
+        Delta = Tkl_exp - Tkl_sim
+
+        delta_vec, _ = _flatten_upper(Delta)
+        grad_vec = beta * delta_vec
+        Hess_upper = (beta**2) * Cov_upper
+
+        return {
+            "type_labels": type_labels,
+            "Tkl_sim": Tkl_sim,
+            "Tkl_exp": Tkl_exp,
+            "Delta": Delta,
+            "upper_indices": iu,
+            "grad_vec": grad_vec,
+            "Hess_upper": Hess_upper,
+            "Cov_upper": Cov_upper,
+            "mu": mu,
+            "rc": rc,
+            "rcut": rcut if rcut is not None else rc + 4.0 / mu,
+            "resolution": "500kb",
+            "N_500kb": int(N_500),
+        }
+
+    else:
+        # Default 100kb pathway: type-averaged observables from monomer contacts.
+        Tkl_sim, Cov_upper, Hess_upper, iu, type_labels = _covariance_pass_upper(
+            positions,
+            monomer_types,
+            mu=mu,
+            rc=rc,
+            rcut=rcut,
+        )
+        K = len(type_labels)
+        Tkl_exp = _load_exp_Tkl(exp_Tkl_path, expected_K=K)
+        Delta = Tkl_exp - Tkl_sim
+
+        delta_vec, _ = _flatten_upper(Delta)
+        grad_vec = beta * delta_vec
+        Hess_upper = (beta**2) * Cov_upper
+
+        return {
+            "type_labels": type_labels,
+            "Tkl_sim": Tkl_sim,
+            "Tkl_exp": Tkl_exp,
+            "Delta": Delta,
+            "upper_indices": iu,
+            "grad_vec": grad_vec,
+            "Hess_upper": Hess_upper,
+            "Cov_upper": Cov_upper,
+            "mu": mu,
+            "rc": rc,
+            "rcut": rcut if rcut is not None else rc + 4.0 / mu,
+            "resolution": None,
+        }
+
 
 def load_all_positions(filename):
     """
@@ -185,7 +447,7 @@ def _rep_dir_and_path(replicate_root, rep_idx):
     traj_path = os.path.join(rep_dir, "trajectory.traj")
     return rep_str, traj_path
 
-def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types, exp_Tkl_path, mu, rc, rcut, beta, manifest_path):
+def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types, exp_Tkl_path, mu, rc, rcut, beta, manifest_path, resolution=None):
     rep_str, traj_path = _rep_dir_and_path(replicate_root, rep_idx)
     out_npz   = os.path.join(output_dir, f"{rep_str}_upper_grad_hess.npz")
     out_touch = os.path.join(output_dir, f"{rep_str}.READY")
@@ -223,24 +485,34 @@ def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types,
             positions=positions,
             monomer_types=monomer_types,
             exp_Tkl_path=exp_Tkl_path,
-            mu=mu, rc=rc, rcut=rcut, beta=beta
+            mu=mu, rc=rc, rcut=rcut, beta=beta,
+            resolution=resolution
         )
         compute_s = time.time() - t_comp0
 
         t_wr0 = time.time()
         if _IO_SEMA is not None: _IO_SEMA.acquire()
         try:
-            np.savez_compressed(
-                out_npz,
-                grad_vec=out["grad_vec"],
-                Hess_upper=out["Hess_upper"],
-                upper_indices_row=out["upper_indices"][0],
-                upper_indices_col=out["upper_indices"][1],
-                type_labels=out["type_labels"],
-                mu=out["mu"], rc=out["rc"], rcut=out["rcut"],
-                K=len(out["type_labels"]),
-                rep=rep_idx,
-            )
+            save_dict = {
+                "grad_vec": out["grad_vec"],
+                "Hess_upper": out["Hess_upper"],
+                "upper_indices_row": out["upper_indices"][0],
+                "upper_indices_col": out["upper_indices"][1],
+                "mu": out["mu"],
+                "rc": out["rc"],
+                "rcut": out["rcut"],
+                "rep": rep_idx,
+                "resolution": out.get("resolution"),  # None or "500kb"
+                "type_labels": out["type_labels"],
+                "K": len(out["type_labels"]),
+            }
+
+            # Extra metadata for 500kb mode
+            if out.get("resolution") == "500kb" and "N_500kb" in out:
+                save_dict["N_500kb"] = out["N_500kb"]
+
+            
+            np.savez_compressed(out_npz, **save_dict)
             Path(out_touch).write_text("ready\n")
         finally:
             if _IO_SEMA is not None: _IO_SEMA.release()
@@ -561,6 +833,8 @@ def parse_args():
     pw.add_argument("--rc", type=float, default=RC_DEFAULT)
     pw.add_argument("--rcut", type=float, default=RCUT_DEFAULT)
     pw.add_argument("--beta", type=float, default=BETA_DEFAULT)
+    pw.add_argument("--resolution", type=str, default=None, 
+                    help="Observable resolution: None (default) for K×K type-averaged observables, '500kb' for (N/5)×(N/5) monomer-resolution observables")
 
     # reduce mode
     pr = sub.add_parser("reduce", help="Aggregate all per-rep artifacts and write epsilon_tk_{n+1}.npy")
@@ -658,6 +932,7 @@ def main():
                     exp_Tkl_path=args.exp_tkl,
                     mu=args.mu, rc=args.rc, rcut=args.rcut, beta=args.beta,
                     manifest_path=manifest_path,
+                    resolution=args.resolution,
                 ),
                 targets,
                 chunksize=1,
