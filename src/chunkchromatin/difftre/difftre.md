@@ -56,6 +56,21 @@ objectives
     -repeat until weights are too small
     -run another simulation
 
+## energy calculation
+Two options are to sequentially use sim.set_positions across frames, update energy, and return it. This does not scale well
+Instead, express all potentials as jax functions with jit, and apply the energy calculation to a vector of frames.
+- Need to test this to make sure my calculation is identical to openMM's
+
+### Testing energy calculation
+Use interactive job to use GPU
+Pick one production run to replicate
+From this production run, choose 5 frames to compare
+OpenMM energy calc function:
+    - make sim object, add forces
+    - set positions
+    - get energy
+Pass the 5 frames to the jax version
+- compare forces.
 
 
 
