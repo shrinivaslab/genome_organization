@@ -2,13 +2,13 @@
 import argparse, os, shutil
 from pathlib import Path
 import numpy as np
-from chunkchromatin.maxent_IC_loop.bin.utils import ensure_dir, write_json, load_config, prepare_seeds, human_time, format_iter
+from chunkchromatin.maxent_tkl_IC_loop.bin.utils import ensure_dir, write_json, load_config, prepare_seeds, human_time, format_iter
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-root", required=True, help="Root directory for this run")
     ap.add_argument("--name", required=True, help="Short run name used in job names")
-    ap.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config_IC.yaml"))
+    ap.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config_tkl_IC.yaml"))
     args = ap.parse_args()
     
 
@@ -22,7 +22,12 @@ def main():
     ensure_dir(run_root / "logs")
     seeds = prepare_seeds(cfg["simulation"]["n_replicates"], cfg["simulation"]["seeds_base"])
 
-    # Copy/resolve exp targets
+    # Copy/resolve exp targets for TKL
+    tkl_targets_src = Path(cfg["exp_targets"]["T_type_kl_npy"]).resolve()
+    tkl_targets_dst = run_root / "exp_targets" / "T_type_kl.npy"
+    shutil.copy2(tkl_targets_src, tkl_targets_dst)
+
+    # Copy/resolve exp targets for IC
     phi_exp_IC_src = Path(cfg["exp_targets"]["phi_exp_IC_npy"]).resolve()
     phi_exp_IC_dst = run_root / "exp_targets" / "phi_exp_IC.npy"
     shutil.copy2(phi_exp_IC_src, phi_exp_IC_dst)
@@ -38,11 +43,13 @@ def main():
         "name": args.name,
         "created_at": human_time(),
         "config_path": str(Path(args.config).resolve()),
+        "T_type_kl_npy": str(tkl_targets_dst),
         "phi_exp_IC_npy": str(phi_exp_IC_dst),
         "n_replicates": cfg["simulation"]["n_replicates"],
         "frames": cfg["simulation"]["frames"],
         "burnin_frames": cfg["simulation"]["burnin_frames"],
         "save_frames": cfg["simulation"]["save_frames"],
+        "n_types": cfg["simulation"]["n_types"],
         "d_init": cfg["ideal_chromosome"]["d_init"],
         "d_end": cfg["ideal_chromosome"]["d_end"],
         "dmax": dmax,
@@ -56,15 +63,23 @@ def main():
     ensure_dir(iter0 / "obs")
     ensure_dir(iter0 / "update")
 
-    # Verify epsilon path exists (fixed, from type-type loop, read directly from config)
-    epsilon_path = cfg["processing_inputs"].get("epsilon")
-    if epsilon_path is None:
-        raise ValueError("config.processing_inputs.epsilon must be set to the fixed KxK epsilon .npy path")
-    eps_path = Path(epsilon_path).resolve()
-    if not eps_path.exists():
-        raise FileNotFoundError(f"Epsilon file not found at config path: {eps_path}")
+    # Initialize epsilon (for TKL optimization)
+    epsilon_init_path = cfg["processing_inputs"].get("epsilon_init")
+    if epsilon_init_path is None or epsilon_init_path == "":
+        raise ValueError("config.processing_inputs.epsilon_init must be set to the initial KxK epsilon .npy path")
+    eps_init_path = Path(epsilon_init_path).resolve()
+    if not eps_init_path.exists():
+        raise FileNotFoundError(f"Initial epsilon file not found: {eps_init_path}")
     
-    # Initialize lambda_IC: load from config if provided, otherwise zeros
+    eps0_dst = iter0 / "params" / "epsilon.npy"
+    shutil.copy2(eps_init_path, eps0_dst)
+    
+    # Also copy as epsilon_tk_0.npy for the Newton update versioning
+    epsilon0_dst = iter0 / "update" / "epsilon_tk_0.npy"
+    shutil.copy2(eps_init_path, epsilon0_dst)
+    print(f"[SETUP] Initialized epsilon from {eps_init_path}")
+
+    # Initialize lambda_IC (for IC optimization)
     lambda_IC_init_path = cfg["processing_inputs"].get("lambda_IC_init")
     if lambda_IC_init_path is not None and lambda_IC_init_path != "":
         lambda_IC_init_path = Path(lambda_IC_init_path).resolve()
@@ -86,7 +101,7 @@ def main():
     np.save(lambda_IC_0_dst, lambda_IC_0)
 
     # Submit iteration 0 driver
-    driver = Path(__file__).resolve().parent / "iteration_driver_IC.py"
+    driver = Path(__file__).resolve().parent / "iteration_driver_tkl_IC.py"
     import subprocess
     cmd = ["sbatch",
        "--job-name", f"{args.name}_iter000_driver",

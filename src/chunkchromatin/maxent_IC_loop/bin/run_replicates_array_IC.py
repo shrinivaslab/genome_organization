@@ -169,6 +169,60 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
     sim_eq.run_simulation_block(200000, save=False)
     monomer_positions_eq = sim_eq.get_positions()
 
+    # === IC FORCE RAMP-UP (sim_ideal_eq) ===
+    # Gradually ramp up IC force from 0 to full strength over 100000 steps
+    print(f"[sim_ideal_eq] Starting IC force ramp-up phase")
+    n_ramp_steps = 100000
+    n_ramp_stages = 10  # Number of stages for gradual ramp-up
+    steps_per_stage = n_ramp_steps // n_ramp_stages
+    
+    current_positions = monomer_positions_eq.copy()
+    
+    # Ramp up IC force gradually by creating new simulation for each stage
+    for stage in range(n_ramp_stages):
+        scale = (stage + 1) / n_ramp_stages  # Scale from 1/n_stages to 1.0
+        scaled_lambda_IC = lambda_IC * scale
+        
+        # Create new simulation for this stage
+        sim_ideal_eq = Simulation(
+            integrator_type="variableLangevin",
+            temperature=300.0,
+            gamma=0.05,
+            timestep=10,
+            platform="CUDA",
+            N=N,
+            reporter=reporter
+        )
+        chromosome_ideal_eq = Chromosome(N, chains, sim_ideal_eq)
+        lamina_ideal_eq = Lamina(N, chains, sim_ideal_eq)
+        sim_ideal_eq.set_positions(current_positions)
+        sim_ideal_eq.add_force(chromosome_ideal_eq.add_harmonic_bond())
+        sim_ideal_eq.add_force(chromosome_ideal_eq.add_angle_force())
+        sim_ideal_eq.add_force(lamina_ideal_eq.add_spherical_confinement(sim_ideal_eq))
+        sim_ideal_eq.add_force(chromosome_ideal_eq.add_polynomial_repulsive(sim_ideal_eq))
+        #sim_ideal_eq.add_force(chromosome_ideal_eq.add_tanh_type_force(sim_ideal_eq, interaction_matrix, monomer_types))
+        sim_ideal_eq.add_force(chromosome_ideal_eq.add_ideal_chromosome_force(
+            sim_ideal_eq,
+            scaled_lambda_IC,
+            d_init=d_init,
+            d_end=d_end
+        ))
+        sim_ideal_eq.create_context()
+        sim_ideal_eq.set_velocities()
+        
+        # Run this stage
+        print(f"[sim_ideal_eq] Stage {stage+1}/{n_ramp_stages}: IC force scale = {scale:.2f}")
+        sim_ideal_eq.run_simulation_block(steps_per_stage, save=False)
+        
+        # Get positions for next stage
+        current_positions = sim_ideal_eq.get_positions()
+        
+        # Clean up simulation object
+        del sim_ideal_eq
+    
+    monomer_positions_after_ramp = current_positions
+    print(f"[sim_ideal_eq] IC force ramp-up complete")
+
     # === PRODUCTION ===
     sim = Simulation(
         integrator_type="variableLangevin",
@@ -179,7 +233,7 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
         N=N,
         reporter=reporter
     )
-    sim.set_positions(monomer_positions_eq)
+    sim.set_positions(monomer_positions_after_ramp)
 
     for force_name in forces_list:
         kwargs = force_kwargs_overrides.get(force_name, {})
@@ -196,7 +250,7 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
         elif force_name == "tanh_type_force":
             force = chromosome.add_tanh_type_force(sim, interaction_matrix, monomer_types, **kwargs)
         elif force_name == "ideal_chromosome_force":
-            # Add ideal chromosome force with lambda_IC
+            # Add ideal chromosome force with full lambda_IC
             force = chromosome.add_ideal_chromosome_force(
                 sim,
                 lambda_IC,

@@ -24,10 +24,17 @@ def main():
         # Resume mode - initial-epsilon not required
         pass
     else:
-        # New run mode - initial-epsilon is required
+        # New run mode - initial-epsilon or lambda_init from config is required
         if not args.initial_epsilon:
-            print("ERROR: --initial-epsilon is required for new runs (not resuming)")
-            return
+            # Try to get initial lambda from config
+            inputs = cfg.get("processing_inputs", {})
+            lambda_init_path = inputs.get("lambda_init")
+            if lambda_init_path:
+                args.initial_epsilon = lambda_init_path
+                print(f"[SETUP] Using initial lambda from config: {lambda_init_path}")
+            else:
+                print("ERROR: --initial-epsilon is required for new runs (not resuming), or provide lambda_init in config.processing_inputs")
+                return
 
     # Handle resume mode
     if args.resume_iter is not None:
@@ -262,6 +269,8 @@ def main():
 
     # Copy initial interaction matrix as epsilon
     eps0_src = Path(args.initial_epsilon).resolve()
+    if not eps0_src.exists():
+        raise FileNotFoundError(f"Initial epsilon/lambda file not found: {eps0_src}")
     eps0_dst = iter0 / "params" / "epsilon.npy"
     shutil.copy2(eps0_src, eps0_dst)
     

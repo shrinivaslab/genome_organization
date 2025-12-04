@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
+"""
+Iteration driver for combined TKL and IC optimization loop.
+Orchestrates simulation, processing, and update steps for both observables.
+"""
 import argparse, os, json, shutil
 from pathlib import Path
-from chunkchromatin.maxent_loop.bin.utils import ensure_dir, load_config, write_json, sbatch_submit, format_iter, make_executable
+from chunkchromatin.maxent_tkl_IC_loop.bin.utils import ensure_dir, load_config, write_json, sbatch_submit, format_iter, make_executable
 
 def main():
     ap = argparse.ArgumentParser()
@@ -22,29 +26,38 @@ def main():
     ensure_dir(iterd / "sims"); ensure_dir(iterd / "obs"); ensure_dir(iterd / "update")
 
     # Paths
-    eps_path = (iterd / "params" / "epsilon.npy").resolve()
+    epsilon_path = (iterd / "params" / "epsilon.npy").resolve()
+    lambda_IC_path = (iterd / "params" / "lambda_IC.npy").resolve()
     seeds_json = (run_root / "seeds.json").resolve()
-    kernel_json = (run_root / "exp_targets" / "kernel.json").resolve()
-    targets_npy = (run_root / "exp_targets" / "T_type_kl.npy").resolve()
     
-    # Load lambda_IC path if provided in config (optional, for ideal chromosome force)
-    inputs = cfg.get("processing_inputs", {})
-    lambda_IC_path = inputs.get("lambda_IC")
-    if lambda_IC_path:
-        lambda_IC_path = Path(lambda_IC_path).resolve()
-        if not lambda_IC_path.exists():
-            raise FileNotFoundError(f"lambda_IC file not found: {lambda_IC_path}")
-    else:
-        lambda_IC_path = None
+    # IC parameters
+    d_init = cfg["ideal_chromosome"]["d_init"]
+    d_end = cfg["ideal_chromosome"]["d_end"]
+
+    # Get max_lambda_step_size from config (default 0.5)
+    max_lambda_step_size = cfg.get("update", {}).get("max_lambda_step_size", 0.5)
     
-    # Get ideal chromosome parameters if lambda_IC is provided
-    d_init = None
-    d_end = None
-    if lambda_IC_path:
-        if "ideal_chromosome" not in cfg:
-            raise ValueError("lambda_IC provided in config but ideal_chromosome section is missing. Please add ideal_chromosome section with d_init and d_end.")
-        d_init = cfg["ideal_chromosome"]["d_init"]
-        d_end = cfg["ideal_chromosome"]["d_end"]
+    # Get gradient_normalization from config (default None for no normalization)
+    gradient_normalization = cfg.get("update", {}).get("gradient_normalization", None)
+    
+    # Get optimization method from config (default "newton")
+    method = cfg.get("update", {}).get("method", "newton")
+    
+    # Get Adam hyperparameters if method is Adam
+    adam_config = cfg.get("update", {}).get("adam", {})
+    adam_lr = adam_config.get("learning_rate", None)
+    adam_lr_ic = adam_config.get("learning_rate_ic", None)  # Separate LR for IC
+    adam_beta1 = adam_config.get("beta1", None)
+    adam_beta2 = adam_config.get("beta2", None)
+    adam_epsilon = adam_config.get("epsilon", None)
+    
+    # Get adaptive step size config
+    adaptive_step_size_config = cfg.get("update", {}).get("adaptive_step_size", None)
+    
+    # Write adaptive config to JSON file for reduce step to read
+    if adaptive_step_size_config is not None:
+        adaptive_config_path = iterd / "obs" / "adaptive_step_size_config.json"
+        write_json(adaptive_config_path, adaptive_step_size_config)
 
     # ------------------------------------
     # SIMULATION ARRAY (stage-specific res)
@@ -52,43 +65,38 @@ def main():
     sim_res = cfg["resources"]["simulation"]
     per_task = int(sim_res.get("per_task_replicates", 1))
     array_len = int(sim_res["array_len"])
-    # Safety: array_len * per_task should cover n_replicates; extra slots are clipped in the template
-    sim_script_tpl = (tpl_dir / "sbatch_sim_array.sh")
+    sim_script_tpl = (tpl_dir / "sbatch_sim_array_tkl_IC.sh")
     sim_script_text = sim_script_tpl.read_text().format(
         job_name=f"{args.name}_sim_{args.iter:03d}",
         account=cfg["slurm"]["account"],
-        partition=sim_res.get("partition", cfg["slurm"]["partition"]),  # use sim-specific or default
+        partition=sim_res.get("partition", cfg["slurm"]["partition"]),
         time_limit=sim_res["time_limit"],
         cpus_per_task=sim_res["cpus_per_task"],
         mem=sim_res["mem"],
-        gres=sim_res.get("gres", ""),  # GPU allocation for simulations
+        gres=sim_res.get("gres", ""),
         array_max=array_len - 1,
         constraint_line=(f"#SBATCH --constraint={cfg['slurm']['constraint']}\n" if cfg["slurm"].get("constraint") else ""),
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
         log_dir=str(logd),
         iter_dir=str(iterd),
-        eps_path=str(eps_path),
+        lambda_IC_path=str(lambda_IC_path),
+        epsilon_path=str(epsilon_path),
         seeds_json=str(seeds_json),
         frames=cfg["simulation"]["frames"],
         burnin=cfg["simulation"]["burnin_frames"],
         save_frames=("1" if cfg["simulation"]["save_frames"] else "0"),
         n_reps=cfg["simulation"]["n_replicates"],
-        kernel_json=str(kernel_json),
-        targets_npy=str(targets_npy),
         obs_dir=str(iterd / "obs"),
-        n_types=cfg["simulation"]["n_types"],
         N=cfg["simulation"]["N"],
         density=cfg["simulation"]["density"],
         initialization_method=cfg["simulation"].get("initialization_method", "random_walk"),
         chains=json.dumps(cfg["simulation"]["chains"]),
         monomer_types=str(Path(cfg["processing_inputs"]["monomer_types"]).resolve()),
-        interaction_matrix=str(eps_path),
-        run_replicates_array=str((bin_dir / "run_replicates_array.py").resolve()),
+        run_replicates_array=str((bin_dir / "run_replicates_array_tkl_IC.py").resolve()),
         series_runner=str((bin_dir / "series_runner.py").resolve()),
         per_task_reps=per_task,
-        lambda_IC_path=str(lambda_IC_path) if lambda_IC_path else "",
-        d_init=d_init if d_init is not None else "",
-        d_end=d_end if d_end is not None else "",
+        d_init=d_init,
+        d_end=d_end,
     )
     sim_sbatch = iterd / "sims" / "submit_sim_array.sh"
     sim_sbatch.write_text(sim_script_text); make_executable(sim_sbatch)
@@ -97,7 +105,7 @@ def main():
 
 
     # ------------------------------------
-    # PROCESSING WORKERS (array 0..N-1) using process_tkl_update.py worker
+    # PROCESSING WORKERS (array 0..N-1) using process_tkl_IC_update.py worker
     # ------------------------------------
     procw = cfg["resources"]["processing"]["workers"]
     inputs = cfg["processing_inputs"]
@@ -108,7 +116,7 @@ def main():
         if key in kf and kf[key] is not None:
             kernel_cli += f" --{key} {kf[key]}"
 
-    procw_tpl = (tpl_dir / "sbatch_process_worker.sh")
+    procw_tpl = (tpl_dir / "sbatch_process_worker_tkl_IC.sh")
     procw_text = procw_tpl.read_text().format(
         job_name=f"{args.name}_pwrk_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -128,8 +136,12 @@ def main():
         io_k=int(procw.get("io_k", 2)),
         monomer_types=str(Path(inputs["monomer_types"]).resolve()),
         exp_tkl=str(Path(inputs["exp_tkl"]).resolve()),
-        process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
+        exp_phi_IC=str(Path(inputs["exp_phi_IC"]).resolve()),
+        process_tkl_IC_update=str((bin_dir / "process_tkl_IC_update.py").resolve()),
         kernel_cli=kernel_cli.strip(),
+        d_init=d_init,
+        d_end=d_end,
+        resolution=inputs.get("resolution", ""),
     )
     procw_sbatch = iterd / "obs" / "submit_process_worker.sh"
     procw_sbatch.write_text(procw_text); make_executable(procw_sbatch)
@@ -137,11 +149,12 @@ def main():
     write_json(iterd / "obs" / "submit_workers.json", {"jobid": procw_jobid, "depends_on": sim_jobid})
 
     # ------------------------------------
-    # PROCESSING REDUCE (single job) using process_tkl_update.py reduce
+    # PROCESSING REDUCE (single job) using process_tkl_IC_update.py reduce
     # ------------------------------------
     procr = cfg["resources"]["processing"]["reduce"]
     epsilon_dir = procr.get("epsilon_dir") or str(iterd / "update")
-    procr_tpl = (tpl_dir / "sbatch_process_reduce.sh")
+    lambda_dir = procr.get("lambda_dir") or str(iterd / "update")
+    procr_tpl = (tpl_dir / "sbatch_process_reduce_tkl_IC.sh")
     procr_text = procr_tpl.read_text().format(
         job_name=f"{args.name}_pred_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -155,8 +168,24 @@ def main():
         iter_dir=str(iterd),
         obs_dir=str(iterd / "obs"),
         epsilon_dir=epsilon_dir,
-        process_tkl_update=str((bin_dir / "process_tkl_update.py").resolve()),
+        lambda_dir=lambda_dir,
+        process_tkl_IC_update=str((bin_dir / "process_tkl_IC_update.py").resolve()),
         iteration=args.iter,
+        max_lambda_step_size=max_lambda_step_size,
+        gradient_normalization=gradient_normalization if gradient_normalization else "",
+        gradient_normalization_flag=f" --gradient-normalization {gradient_normalization}" if gradient_normalization else "",
+        method=method,
+        method_flag=f" --method {method}" if method else "",
+        adam_lr=adam_lr if adam_lr is not None else "",
+        adam_lr_flag=f" --adam-lr {adam_lr}" if adam_lr is not None else "",
+        adam_lr_ic=adam_lr_ic if adam_lr_ic is not None else "",
+        adam_lr_ic_flag=f" --adam-lr-ic {adam_lr_ic}" if adam_lr_ic is not None else "",
+        adam_beta1=adam_beta1 if adam_beta1 is not None else "",
+        adam_beta1_flag=f" --adam-beta1 {adam_beta1}" if adam_beta1 is not None else "",
+        adam_beta2=adam_beta2 if adam_beta2 is not None else "",
+        adam_beta2_flag=f" --adam-beta2 {adam_beta2}" if adam_beta2 is not None else "",
+        adam_epsilon=adam_epsilon if adam_epsilon is not None else "",
+        adam_epsilon_flag=f" --adam-epsilon {adam_epsilon}" if adam_epsilon is not None else "",
     )
     procr_sbatch = iterd / "obs" / "submit_process_reduce.sh"
     procr_sbatch.write_text(procr_text); make_executable(procr_sbatch)
@@ -164,9 +193,9 @@ def main():
     write_json(iterd / "obs" / "submit_reduce.json", {"jobid": procr_jobid, "depends_on": procw_jobid})
 
     # ------------------------------------
-    # UPDATE (single job) using update_step.py
+    # UPDATE (single job) using update_step_tkl_IC.py
     # ------------------------------------
-    upd_script_tpl = (tpl_dir / "sbatch_update.sh")
+    upd_script_tpl = (tpl_dir / "sbatch_update_tkl_IC.sh")
     upd_script_text = upd_script_tpl.read_text().format(
         job_name=f"{args.name}_update_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -178,7 +207,7 @@ def main():
         qos_line=(f"#SBATCH --qos={cfg['slurm']['qos']}\n" if cfg["slurm"].get("qos") else ""),
         log_dir=str(logd),
         iter_dir=str(iterd),
-        update_step=str((bin_dir / "update_step.py").resolve()),
+        update_step=str((bin_dir / "update_step_tkl_IC.py").resolve()),
         run_root=str(run_root),
         iter_idx=args.iter,
         config_yaml=str(Path(args.config).resolve()),
@@ -190,3 +219,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

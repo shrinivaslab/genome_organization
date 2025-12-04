@@ -83,6 +83,11 @@ def main():
     # Compute delta for state tracking
     delta = lam_next - lam
 
+    # Compute relative error: sum(|gradients|) / sum(|experimental|) * 100%
+    sum_abs_grad = np.sum(np.abs(g))
+    sum_abs_exp = np.sum(np.abs(T))
+    relative_error_pct = (sum_abs_grad / sum_abs_exp * 100.0) if sum_abs_exp > 0 else float('inf')
+
     # Save update artifacts (now mainly for diagnostics and state tracking)
     upd = iterd / "update"
     np.save(upd / "grad.npy", g)
@@ -97,6 +102,7 @@ def main():
         "precond_diag": "N/A (using Newton update)",
         "max_abs_residual": float(np.max(np.abs(g))),
         "l2_residual": float(np.linalg.norm(g)),
+        "relative_error_pct": float(relative_error_pct),
         "max_param_step": float(np.max(np.abs(delta))),
         "update_method": "Newton (from process_tkl_update.py)",
     }

@@ -23,7 +23,10 @@ def main():
 
     # Paths
     lambda_IC_path = (iterd / "params" / "lambda_IC.npy").resolve()
-    epsilon_path = (iterd / "params" / "epsilon.npy").resolve()  # Fixed epsilon from type-type loop
+    # Epsilon is fixed and read directly from config path (not copied per iteration)
+    epsilon_path = Path(cfg["processing_inputs"]["epsilon"]).resolve()
+    if not epsilon_path.exists():
+        raise FileNotFoundError(f"Epsilon file not found at config path: {epsilon_path}")
     seeds_json = (run_root / "seeds.json").resolve()
     phi_exp_IC_path = (run_root / "exp_targets" / "phi_exp_IC.npy").resolve()
 
