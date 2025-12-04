@@ -16,7 +16,6 @@ from functools import partial
 import multiprocessing as mp
 from scipy.spatial import cKDTree
 from scipy.linalg import cho_factor, cho_solve
-from scipy.spatial.distance import cdist
 
 # ==========================
 # Constants / defaults
@@ -89,11 +88,12 @@ class PhiICOnlineCov:
 
 def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None, cutoff=0.0):
     """
-    Compute phi_IC[d] from positions for all frames.
+    Compute phi_IC[d] from positions for all frames (OPTIMIZED VERSION).
     
     For each frame:
-    1. Compute contact probability matrix P using tanh kernel
-    2. Extract phi[d] = mean(diagonal(P, offset=d)) for each d in [d_init, d_end)
+    1. Use spatial indexing (cKDTree) to find pairs within rcut
+    2. Compute contact probabilities only for nearby pairs
+    3. Vectorize diagonal extraction using advanced indexing
     
     Parameters
     ----------
@@ -125,20 +125,59 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
     
     phi_frames = np.zeros((F, dmax), dtype=float)
     
+    # Pre-allocate arrays for vectorized diagonal extraction
+    # For each genomic distance d, we need to track which pairs (i,j) have |j-i| = d
+    d_values = np.arange(d_init, d_end)
+    
     for f in range(F):
         X = positions[f]
         
-        # Compute pairwise distances
-        dists = cdist(X, X, 'euclidean')
+        # Use spatial indexing instead of computing full distance matrix
+        tree = cKDTree(X, leafsize=40)
+        pairs = tree.query_pairs(rcut, output_type='ndarray')
         
-        # Compute contact probability matrix using tanh kernel
-        P = f_switch(dists, mu=mu, rc=rc)
-        P[P < cutoff] = 0.0
+        if pairs.size == 0:
+            # No pairs found, all phi[d] remain zero
+            continue
         
-        # Extract phi[d] = mean(diagonal(P, offset=d)) for each genomic distance
-        for d_idx, d in enumerate(range(d_init, d_end)):
-            diag = np.diagonal(P, offset=d)
-            phi_frames[f, d_idx] = np.mean(diag)
+        i = pairs[:, 0]
+        j = pairs[:, 1]
+        
+        # Compute distances and contact probabilities only for nearby pairs
+        rij = np.linalg.norm(X[i] - X[j], axis=1)
+        fij = f_switch(rij, mu=mu, rc=rc)
+        
+        # Apply cutoff
+        if cutoff > 0.0:
+            mask = fij >= cutoff
+            i = i[mask]
+            j = j[mask]
+            fij = fij[mask]
+        
+        if i.size == 0:
+            continue
+        
+        # Compute genomic distances |j - i| for all pairs
+        # query_pairs returns i < j, so genomic distance = j - i (always positive)
+        genomic_dists = j - i
+        
+        # Vectorized accumulation: for each d in [d_init, d_end), compute mean of fij
+        # where genomic_dists == d. Use bincount for efficient aggregation.
+        # Filter to only genomic distances in our range
+        valid_mask = (genomic_dists >= d_init) & (genomic_dists < d_end)
+        if np.any(valid_mask):
+            genomic_dists_valid = genomic_dists[valid_mask]
+            fij_valid = fij[valid_mask]
+            
+            # Use bincount to sum fij for each genomic distance, then divide by counts
+            # Shift indices so d_init maps to 0
+            dist_indices = genomic_dists_valid - d_init
+            sums = np.bincount(dist_indices, weights=fij_valid, minlength=dmax)
+            counts = np.bincount(dist_indices, minlength=dmax)
+            
+            # Compute means (avoid division by zero)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                phi_frames[f, :] = np.where(counts > 0, sums / counts, 0.0)
     
     return phi_frames
 

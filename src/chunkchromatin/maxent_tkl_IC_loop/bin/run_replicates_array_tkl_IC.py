@@ -1,6 +1,6 @@
 """
-This script is a trial optimization run involving a single replicate of a simulation,
-intended to be run via a SLURM job array using SLURM_ARRAY_TASK_ID.
+This script runs a single replicate with both type-type (TKL) and ideal chromosome (IC) force support.
+Intended to be run via a SLURM job array using SLURM_ARRAY_TASK_ID.
 """
 import argparse
     
@@ -28,22 +28,23 @@ output_base = os.environ.get("MAXENT_REPL_OUT_BASE")
 if not output_base:
     raise ValueError("MAXENT_REPL_OUT_BASE environment variable not set")
 
-# Use environment variables for input paths to avoid hardcoded paths
+# Use environment variables for input paths
 monomer_types_path = os.environ.get("MAXENT_MONOMER_TYPES")
 if not monomer_types_path:
     raise ValueError("MAXENT_MONOMER_TYPES environment variable not set")
 
-interaction_matrix_path = os.environ.get("MAXENT_INTERACTION_MATRIX") 
-if not interaction_matrix_path:
-    raise ValueError("MAXENT_INTERACTION_MATRIX environment variable not set")
+# Load epsilon (for tanh_type_force) and lambda_IC (for ideal_chromosome_force)
+epsilon_path = os.environ.get("MAXENT_EPSILON_PATH")
+if not epsilon_path:
+    raise ValueError("MAXENT_EPSILON_PATH environment variable not set")
 
-# Load lambda_IC (optional, for ideal chromosome force)
 lambda_IC_path = os.environ.get("MAXENT_LAMBDA_IC_PATH")
-lambda_IC = None
-if lambda_IC_path and lambda_IC_path.strip():  # Check for non-empty string
-    lambda_IC = np.load(lambda_IC_path)
-    d_init = int(os.environ.get("MAXENT_D_INIT", "3"))
-    d_end = int(os.environ.get("MAXENT_D_END", "300"))
+if not lambda_IC_path:
+    raise ValueError("MAXENT_LAMBDA_IC_PATH environment variable not set")
+
+# IC parameters
+d_init = int(os.environ.get("MAXENT_D_INIT", "3"))
+d_end = int(os.environ.get("MAXENT_D_END", "300"))
 
 # Read simulation parameters from environment variables
 N = int(os.environ.get("MAXENT_N", "3725"))
@@ -52,41 +53,35 @@ chains_json = os.environ.get("MAXENT_CHAINS", "[[0, 1570, false], [1570, 2775, f
 chains = [(start, end, is_ring) for start, end, is_ring in json.loads(chains_json)]
 initialization_method = os.environ.get("MAXENT_INITIALIZATION_METHOD", "random_walk")
 monomer_types = np.load(monomer_types_path)
-interaction_matrix = np.load(interaction_matrix_path)
+interaction_matrix = np.load(epsilon_path)  # Use epsilon for type-type interactions
+lambda_IC = np.load(lambda_IC_path)  # Load lambda_IC for ideal chromosome force
 
 # Default force kwargs overrides
 DEFAULT_FORCE_KWARGS_OVERRIDES = {
     "harmonic_bonds": {
-        # Loosen bonds a bit so local packing isn't over‑constrained
-        "bondWiggleDistance": 0.10,   # (σ units)
+        "bondWiggleDistance": 0.10,
         "bondLength": 1.0
     },
     "angle_force": {
-        # Match MiChroM reduced-unit stiffness: k_a ≈ 2 ε with ε = kBT
-        "k": 2.0,                     # in kT/rad^2
+        "k": 2.0,
         "theta_0": np.pi
     },
     "spherical_confinement": {
-        # Use volume fraction ~0.10 and a softer wall
         "r": "density",
         "density": 0.10,
-        "k": 1.5,                     # softer than 5.0
+        "k": 1.5,
         "center": [0.0, 0.0, 0.0],
         "invert": False,
         "particles": None,
         "name": "spherical_confinement"
     },
     "polynomial_repulsive": {
-        # Soften nonbonded repulsion and extend cutoff slightly
-        "trunc": 5,                 # energy cap at r→0 in kT
+        "trunc": 5,
         "radiusMult": 1,
         "name": "polynomial_repulsive"
     },
-    "add_nonbonded_pair_potential": {
-        # leave as your current default unless you want to retune αkl here
-    },
     "tanh_type_force": {
-        # leave as your current default (α matrix already passed in)
+        # Uses interaction_matrix (epsilon) passed in
     },
     "ideal_chromosome_force": {
         # Uses lambda_IC, d_init, d_end passed in
@@ -99,9 +94,7 @@ if force_kwargs_json:
     force_kwargs_overrides = json.loads(force_kwargs_json)
 else:
     force_kwargs_overrides = DEFAULT_FORCE_KWARGS_OVERRIDES
-forces_list = ['harmonic_bonds','angle_force','spherical_confinement','tanh_type_force','polynomial_repulsive']
-if lambda_IC is not None:
-    forces_list.append('ideal_chromosome_force')
+forces_list = ['harmonic_bonds','angle_force','spherical_confinement','tanh_type_force','polynomial_repulsive','ideal_chromosome_force']
 box_length = (N/density) ** (1/3.)
 
 out_dir = os.path.join(output_base, rep_name)
@@ -122,14 +115,13 @@ metadata = {
     "chains": chains,
     "force_list": forces_list,
     "interaction_matrix": interaction_matrix.tolist(),
+    "lambda_IC": lambda_IC.tolist(),
+    "d_init": d_init,
+    "d_end": d_end,
     "monomer_types_path": monomer_types_path,
     "random_seed": int(seed),
     "initialization_method": initialization_method
 }
-if lambda_IC is not None:
-    metadata["lambda_IC"] = lambda_IC.tolist()
-    metadata["d_init"] = d_init
-    metadata["d_end"] = d_end
 
 traj_path = os.path.join(out_dir, "trajectory.traj")
 start_time = time.time()
@@ -141,7 +133,7 @@ if initialization_method == "random_walk":
     k_wall=force_kwargs_overrides['spherical_confinement']['k'], step_size=1, center=(0.0, 0.0, 0.0), 
     min_sep=0.5)
 elif initialization_method == "grow_cubic":
-    box_size = int(box_length)  # Convert to integer for cubic lattice
+    box_size = int(box_length)
     monomer_positions = grow_cubic_multi(chains, box_size, method='standard')
 elif initialization_method == "territory_rw":
     monomer_positions = init_multi_territory_rw(chains, density,
@@ -152,7 +144,7 @@ elif initialization_method == "territory_crumpled":
     k_wall=force_kwargs_overrides['spherical_confinement']['k'], step_size=1, center=(0.0, 0.0, 0.0), 
     min_sep=0.1, block_size=20, bias_strength=0.6, territory_center_frac=0.7)
 else:
-    raise ValueError(f"Unknown initialization method: {initialization_method}. Supported methods: 'random_walk', 'grow_cubic'")
+    raise ValueError(f"Unknown initialization method: {initialization_method}")
 with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metadata) as reporter:
 
     # === EQUILIBRATION ===
@@ -205,8 +197,6 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
             force = chromosome.add_tanh_type_force(sim, interaction_matrix, monomer_types, **kwargs)
         elif force_name == "ideal_chromosome_force":
             # Add ideal chromosome force with lambda_IC
-            if lambda_IC is None:
-                raise ValueError("ideal_chromosome_force requested but lambda_IC not provided")
             force = chromosome.add_ideal_chromosome_force(
                 sim,
                 lambda_IC,
@@ -221,12 +211,30 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
     sim.create_context()
     sim.set_velocities()
     sim.run_simulation_block(500000, save=False)
+    
+    # Load seeds from JSON if available
+    frames = int(os.environ.get("MAXENT_FRAMES", "4000"))
+    burnin = int(os.environ.get("MAXENT_BURNIN", "400"))
+    save_frames = os.environ.get("MAXENT_SAVE_FRAMES", "1") == "1"
+    
+    seeds_json_path = os.environ.get("MAXENT_SEEDS_JSON")
+    if seeds_json_path and os.path.exists(seeds_json_path):
+        with open(seeds_json_path, "r") as f:
+            seeds_dict = json.load(f)
+        seed_key = str(rep_idx)  # Use rep_idx as key (0-based)
+        if seed_key in seeds_dict:
+            fixed_seed = seeds_dict[seed_key]
+            np.random.seed(fixed_seed)
+            # Reinitialize velocities with fixed seed for reproducibility
+            sim.set_velocities()
+    
     try:
-        for _ in range(4000):
-            sim.run_simulation_block(1000)
-            with open(f"{out_dir}/simulation_stats.txt", "a") as f:
-                stats = str(sim.print_stats())
-                f.write(stats + "\n")
+        for i in range(frames):
+            sim.run_simulation_block(1000, save=save_frames)
+            if (i + 1) % 100 == 0:
+                with open(f"{out_dir}/simulation_stats.txt", "a") as f:
+                    stats = str(sim.print_stats())
+                    f.write(stats + "\n")
     except EKExceedsError:
         with open(f"{out_dir}/simulation_failed.txt", "w") as f:
             f.write("EKExceedsError occurred.\n")
@@ -243,3 +251,4 @@ summary = {
 }
 with open(os.path.join(out_dir, "manifest.json"), "w") as f:
     json.dump(summary, f, indent=2)
+

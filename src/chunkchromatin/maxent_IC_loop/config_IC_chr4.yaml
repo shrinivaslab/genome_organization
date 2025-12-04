@@ -20,27 +20,9 @@ simulation:
   seeds_base: 177013        # derive 50 fixed seeds from this base
   n_types: 5                # number of chromatin types (K)
   density: 0.33             # density for box length calculation
-  N: 24675                   # total number of monomers in the system
+  N: 1570                   # total number of monomers in the system
   chains:                   # chain definitions [(start, end, is_ring), ...]
-    - [0, 1955, false]      # chromosome 1
-    - [1955, 3780, false]      # chromosome 2
-    - [3780, 5385, false]      # chromosome 3
-    - [5385, 6955, false]      # chromosome 4
-    - [6955, 8475, false]      # chromosome 5
-    - [8475, 9975, false]      # chromosome 6
-    - [9975, 11430, false]      # chromosome 7
-    - [11430, 12725, false]      # chromosome 8
-    - [12725, 13975, false]      # chromosome 9
-    - [13975, 15285, false]      # chromosome 10
-    - [15285, 16510, false]      # chromosome 11
-    - [16510, 17715, false]      # chromosome 12
-    - [17715, 18920, false]      # chromosome 13
-    - [18920, 20170, false]      # chromosome 14
-    - [20170, 21215, false]      # chromosome 15
-    - [21215, 22200, false]      # chromosome 16
-    - [22200, 23150, false]      # chromosome 17
-    - [23150, 24060, false]      # chromosome 18
-    - [24060, 24675, false]      # chromosome 19
+    - [0, 1570, false]      # chromosome 1
   initialization_method: "territory_rw"  # "random_walk" or "grow_cubic"
 
 # Ideal Chromosome (IC) specific settings
@@ -88,11 +70,13 @@ convergence:
 
 # Inputs processing script expects:
 processing_inputs:
-  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr1_to_chr19.npy"
+  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr4.npy"
   # Path to epsilon.npy from type-type maxent loop (fixed, not optimized)
-  epsilon: "/path/to/epsilon.npy"
+  epsilon: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/all_chrom_500kb_trunc3_rw_voronoi/iter_014/params/epsilon.npy"
   # Path to experimental phi_exp_IC observable
-  exp_phi_IC: "/path/to/phi_exp_IC.npy"
+  exp_phi_IC: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+  # Optional: Path to initial lambda_IC (if null, starts from zeros)
+  lambda_IC_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/IC_chr4_13_17_chrom_trunc3_100kb_rw_voronoi_iter14_eps/iter_006/params/lambda_IC.npy"
   # Optional: kernel parameters for IC observable computation
   kernel_flags:
     mu:   4.22
@@ -102,33 +86,30 @@ processing_inputs:
 
 # Pinned kernel and experimental target vector
 exp_targets:
-  phi_exp_IC_npy: "/path/to/phi_exp_IC.npy"
+  phi_exp_IC_npy: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
 
 # ------------------------------
 # stage-specific resources
 # ------------------------------
 resources:
   simulation:
-    array_len: 5
-    per_task_replicates: 10
-    time_limit: "8:00:00"
+    array_len: 8               # 8 GPU jobs running concurrently
+    per_task_replicates: 7     # 50 total reps: 7 jobs get 7 reps, 1 job gets 1 rep
+    time_limit: "3:00:00"      # Chr4: 2h 21min actual + 1.3x buffer
     cpus_per_task: 1
-    mem: "16G"
+    mem: "350M"                # Chr4: 135MB actual + 2.6x buffer (conservative)
     # GPU-specific settings for simulation jobs
     partition: "gengpu"        # override global partition for simulations
     gres: "gpu:a100:1"         # GPU resource allocation
   processing:
     workers:
       array_len: 8
-      time_limit: "4:00:00"
+      time_limit: "0:15:00"    # Chr4: 1m 16s actual + 12x buffer (very conservative)
       cpus_per_task: 7
-      mem: "48G"
+      mem: "8G"                # Chr4: 2.45GB actual + 3.3x buffer
       io_k: 2         # exported as MAXENT_IO_K and passed as --io-k
     reduce:
-      time_limit: "1:00:00"
+      time_limit: "0:10:00"
       cpus_per_task: 1
-      mem: "20G"
-      # Where to write updated parameters if your reducer does that;
-      # if omitted, we default to {iter_dir}/update
-      alpha_dir: null
+      mem: "1G"                # Reduce uses minimal memory
 
