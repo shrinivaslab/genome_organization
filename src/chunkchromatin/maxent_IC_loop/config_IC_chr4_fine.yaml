@@ -1,0 +1,96 @@
+# MaxEnt IC-only loop configuration (conservative step sizes)
+
+slurm:
+  account: "p32733"
+  partition: "short"
+  time_limit: "4:00:00"
+  cpus_per_task: 7
+  mem: "25G"
+  constraint: null
+  qos: null
+
+simulation:
+  n_replicates: 50
+  frames: 4000
+  burnin_frames: 400
+  save_frames: true
+  seeds_base: 177013
+  n_types: 5
+  density: 0.33
+  N: 1570
+  chains:
+    - [0, 1570, false]
+  initialization_method: "random_walk"
+
+ideal_chromosome:
+  d_init: 3
+  d_end: 300
+
+force_kwargs:
+  harmonic_bonds:
+    bondWiggleDistance: 0.10
+    bondLength: 1.0
+  angle_force:
+    k: 2.0
+    theta_0: 3.141592653589793
+  spherical_confinement:
+    r: "density"
+    density: 0.10
+    k: 1.5
+    center: [0.0, 0.0, 0.0]
+    invert: false
+    particles: null
+    name: "spherical_confinement"
+  polynomial_repulsive:
+    trunc: 3
+    radiusMult: 1
+    name: "polynomial_repulsive"
+
+# Newton/BB update tuned down to avoid large swings
+update:
+  eta_init: 5.0e-4   # smaller initial step than default
+  eta_min: 1.0e-6
+  eta_max: 1.0e-1    # cap overall step size more tightly
+  precond_eps: 1.0e-8
+  bb_clip_fraction: 0.10  # stronger clip on BB step to limit overshoot
+
+convergence:
+  max_abs_residual: 1.0e-3
+  l2_residual: 5.0e-3
+  max_param_step: 1.0e-4
+  consecutive: 2
+
+processing_inputs:
+  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr4.npy"
+  epsilon: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/tkl_IC_opt_chr4/iter_014/params/epsilon.npy"
+  exp_phi_IC: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+  lambda_IC_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/IC_chr4_trunc3_100kb_tkl_from_all_chrom_iter14eps/iter_099/params/lambda_IC.npy"
+  kernel_flags:
+    mu:   4.22
+    rc:   1.82
+    rcut: 3.0
+    beta: 1.0
+
+exp_targets:
+  phi_exp_IC_npy: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+
+resources:
+  simulation:
+    array_len: 8           # 8 x 7 = 56 >= 50 reps
+    per_task_replicates: 7
+    time_limit: "3:00:00"
+    cpus_per_task: 1
+    mem: "350M"
+    partition: "gengpu"
+    gres: "gpu:a100:1"
+  processing:
+    workers:
+      array_len: 8
+      time_limit: "0:15:00"
+      cpus_per_task: 7
+      mem: "8G"
+      io_k: 2
+    reduce:
+      time_limit: "0:10:00"
+      cpus_per_task: 1
+      mem: "1G"

@@ -1,6 +1,8 @@
 # MaxEnt combined TKL and IC loop configuration
 # This config optimizes both epsilon (type-type interactions) and lambda_IC (ideal chromosome force) simultaneously.
 # Edit values as needed, but do not change keys.
+# 
+# This config continues from iter_099 of ABC_only run with increased learning rate for TKL terms
 
 # SLURM settings (global defaults; can be overridden per-stage in `resources`)
 slurm:
@@ -89,8 +91,8 @@ update:
     min_step_size: 0.0001
   # Adam-specific hyperparameters (only used when method="adam")
   adam:
-    learning_rate: 0.001  # Initial learning rate for TKL (epsilon)
-    learning_rate_ic: null  # Learning rate for IC (lambda_IC). If null, uses learning_rate. Use higher value (e.g., 0.005) to compensate for smaller IC gradients
+    learning_rate: 0.01  # Initial learning rate for TKL (epsilon) - INCREASED from 0.001 to allow TKL terms to move more
+    learning_rate_ic: 0.003  # Learning rate for IC (lambda_IC). IC gradients are already small, so keep conservative
     beta1: 0.9  # Exponential decay rate for first moment estimates
     beta2: 0.999  # Exponential decay rate for second moment estimates
     epsilon: 1e-8  # Small constant for numerical stability
@@ -106,7 +108,7 @@ convergence:
 # Inputs processing script expects:
 processing_inputs:
   # Required: monomer types assignment
-  monomer_types: "/projects/p32733/ME/maxent/chr4_training/ABC_only/ABC_only_1/ABC_monomer_types_chr4.npy"
+  monomer_types: "/projects/p32733/ME/maxent/chr4_training/ABC_only/ABC_monomer_types_chr4.npy"
   
   # Required: TKL experimental observable
   exp_tkl: "/projects/p32733/ME/experimental_data/ABC_chr_4_500mb_Tkl_exp_interpolated.npy"
@@ -115,11 +117,12 @@ processing_inputs:
   exp_phi_IC: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
   
   # Required: Initial epsilon (K×K matrix) for type-type interactions
-  epsilon_init: "/projects/p32733/ME/maxent/chr4_training/ABC_only/init_epsilon.npy"
+  # Using last iteration from previous run (iter_099)
+  epsilon_init: "/projects/p32733/ME/maxent/chr4_training/ABC_only/iter_099/params/epsilon.npy"
   
   # Optional: Initial lambda_IC (dmax vector). If not provided, starts from zeros
-  # Best IC loss: iter_000 (max_abs: 0.112, l2: 0.267)
-  lambda_IC_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/tkl_IC_opt_chr4/iter_000/params/lambda_IC.npy"
+  # Using last iteration from previous run (iter_099)
+  lambda_IC_init: "/projects/p32733/ME/maxent/chr4_training/ABC_only/iter_099/params/lambda_IC.npy"
   
   # Optional: resolution for observables ("500kb" for monomer-resolution, null for type-averaged)
   resolution: "500kb"

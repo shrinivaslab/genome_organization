@@ -44,6 +44,31 @@ simulation:
     - [24060, 24675, false]      # chromosome 19
   initialization_method: "territory_rw"  # "random_walk" or "grow_cubic" or "territory_rw"
 
+# Required for compare_contact_maps.py: chromosome names matching chain order
+chromosomes:
+  - "chr1"
+  - "chr2"
+  - "chr3"
+  - "chr4"
+  - "chr5"
+  - "chr6"
+  - "chr7"
+  - "chr8"
+  - "chr9"
+  - "chr10"
+  - "chr11"
+  - "chr12"
+  - "chr13"
+  - "chr14"
+  - "chr15"
+  - "chr16"
+  - "chr17"
+  - "chr18"
+  - "chr19"
+
+# Bin size in basepairs for contact map comparison (default: 100000)
+bin_size_bp: 500000  # 500kb resolution
+
 # Ideal Chromosome (IC) specific settings
 ideal_chromosome:
   d_init: 3          # minimum genomic distance (bins)
@@ -155,4 +180,40 @@ resources:
       # Optional: custom directories for parameter outputs (defaults to {iter_dir}/update)
       epsilon_dir: null
       lambda_dir: null
+
+  # Optional: contact-map job resources and script for standalone runs
+  # If `contact_map.enabled` is true, iteration_driver_tkl_IC_standalone.py will
+  # submit a separate CPU job after simulations finish to build a single
+  # contact map from all iter_000 trajectories.
+  contact_map:
+    enabled: true
+    # Path to traj_to_cmap_cpu.py script (or equivalent)
+    script: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/model_encoding_evaluations/traj_to_cmap/cpu/traj_to_cmap_cpu.py"
+    # Optional override for kernel parameters; if omitted, falls back to
+    # processing_inputs.kernel_flags.{mu,rc,rcut}
+    mu: null
+    rc: null
+    rcut: null
+    # SLURM resources for the contact-map job (defaults mirror processing.reduce)
+    time_limit: "24:00:00"
+    cpus_per_task: 8
+    mem: "192G"
+    partition: "normal"
+
+  # Optional: contact map comparison/plotting job
+  # If `compare_plots.enabled` is true, iteration_driver_tkl_IC_standalone.py will
+  # submit a job after the contact map is created to generate p(s) and contact map plots.
+  compare_plots:
+    enabled: true
+    # Path to compare_contact_maps.py script
+    script: "/home/pkv4601/genome_architecture/github/genome_organization/src/chunkchromatin/validation/compare_contact_maps.py"
+    # Experimental contact map (.npy) - interpolated version for comparison
+    exp_cmap_path: "/projects/p32733/ME/experimental_data/all_chroms_500mb_Tkl_exp_interpolated.npy"
+    # Experimental .mcool file (for getting bin counts per chromosome)
+    exp_mcool_path: null  # Set this to your .mcool file path
+    # SLURM resources for the comparison job
+    time_limit: "1:00:00"
+    cpus_per_task: 4
+    mem: "16G"
+    partition: "short"
 

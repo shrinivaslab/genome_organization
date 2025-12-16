@@ -37,6 +37,8 @@ ADAM_LR_DEFAULT = 1e-3
 ADAM_BETA1_DEFAULT = 0.9
 ADAM_BETA2_DEFAULT = 0.999
 ADAM_EPS_DEFAULT = 1e-8
+RELSTEP_TARGET_DEFAULT = 0.02   # target rms step as fraction of rms(param)
+RELSTEP_MAX_FRAC_DEFAULT = 0.05 # per-parameter cap as fraction of |param|
 
 # ==========================
 # Core kernels & helpers (shared)
@@ -768,6 +770,9 @@ def _compute_relative_error_step_sizes(
     scaling_info : dict
         Information about the scaling applied
     """
+    if base_max_step_size is None:
+        return None, None, {"reason": "no_base_step_size"}
+
     if adaptive_config is None or iteration_idx is None or iteration_idx == 0:
         return base_max_step_size, base_max_step_size, {"reason": "first_iteration"}
     
@@ -1190,6 +1195,40 @@ def _apply_adam_update(
     return delta_vec, m_new, v_new, meta
 
 # ==========================
+# Relative step capping
+# ==========================
+def _apply_relative_step_cap(delta_vec, param_vec, target_rms_frac=None, max_frac=None, label=""):
+    """
+    Rescale/clamp update relative to parameter magnitudes.
+    - target_rms_frac: scale update so rms(delta) <= target_rms_frac * rms(param)
+    - max_frac: clip each element to max_frac * max(|param_i|, rms(param)) to allow motion near zero params
+    """
+    if delta_vec is None or param_vec is None or delta_vec.size == 0:
+        return delta_vec
+
+    delta_vec = delta_vec.copy()
+    param_rms = float(np.sqrt(np.mean(param_vec ** 2))) if param_vec.size > 0 else 0.0
+    safe_scale = max(param_rms, 1e-12)
+
+    if target_rms_frac is not None:
+        target_rms = target_rms_frac * safe_scale
+        delta_rms = float(np.sqrt(np.mean(delta_vec ** 2)))
+        if delta_rms > target_rms and delta_rms > 0:
+            scale = target_rms / delta_rms
+            delta_vec *= scale
+            print(f"[RELSTEP {label}] Scaled to target RMS: {delta_rms:.3e} -> {target_rms:.3e} (scale={scale:.3f})")
+
+    if max_frac is not None:
+        cap_vec = max_frac * np.maximum(np.abs(param_vec), safe_scale)
+        before = float(np.max(np.abs(delta_vec)))
+        delta_vec = np.clip(delta_vec, -cap_vec, cap_vec)
+        after = float(np.max(np.abs(delta_vec)))
+        if after < before - 1e-12:
+            print(f"[RELSTEP {label}] Clipped per-param to {max_frac*100:.1f}% of |param| (or rms); max |Δ| {before:.3e} -> {after:.3e}")
+
+    return delta_vec
+
+# ==========================
 # Combined worker function
 # ==========================
 def _process_replicate_entry_tkl_IC(
@@ -1360,7 +1399,9 @@ def reduce_and_update_both(
     adam_epsilon=None,
     adaptive_step_size_config=None,  # Dict with reduction strategy config
     use_separate_updates=False,  # If True, update TKL and IC separately (no cross-covariance)
-    adam_lr_ic=None  # Separate learning rate for IC (if None, uses adam_lr)
+    adam_lr_ic=None,  # Separate learning rate for IC (if None, uses adam_lr)
+    relstep_target_frac=None,
+    relstep_max_frac=None
 ):
     """
     Read all repXX_*_grad_hess.npz files, aggregate gradients and Hessians,
@@ -1393,6 +1434,10 @@ def reduce_and_update_both(
         raise RuntimeError(f"No TKL per-replicate .npz found in {output_dir}")
     if len(files_ic) == 0:
         raise RuntimeError(f"No IC per-replicate .npz found in {output_dir}")
+
+    # Relative step parameters (enable by default)
+    relstep_target_frac = RELSTEP_TARGET_DEFAULT if relstep_target_frac is None else relstep_target_frac
+    relstep_max_frac = RELSTEP_MAX_FRAC_DEFAULT if relstep_max_frac is None else relstep_max_frac
     
     print(f"[REDUCE] Processing {len(files_tkl)} TKL replicates and {len(files_ic)} IC replicates")
     
@@ -1406,9 +1451,9 @@ def reduce_and_update_both(
                     adaptive_step_size_config = json.load(f)
             except Exception as e:
                 print(f"[WARNING] Could not load adaptive_step_size_config.json: {e}")
-    
+
     original_max_step_size = max_lambda_step_size
-    
+
     # ========== Compute relative-error-based step sizes (separate for TKL and IC) ==========
     max_step_tkl, max_step_ic, rel_err_scaling_info = _compute_relative_error_step_sizes(
         max_lambda_step_size,
@@ -1427,7 +1472,7 @@ def reduce_and_update_both(
     
     # ========== Apply global adaptive step size reduction (if enabled) ==========
     # This reduces both TKL and IC step sizes together (for fine-tuning near convergence)
-    if adaptive_step_size_config is not None:
+    if adaptive_step_size_config is not None and max_step_tkl is not None and max_step_ic is not None:
         # Apply reduction to both (they'll be scaled proportionally)
         max_step_tkl_reduced, reduction_reason_tkl = _compute_adaptive_step_size(
             max_step_tkl,
@@ -1451,7 +1496,7 @@ def reduce_and_update_both(
                 print(f"[ADAPTIVE STEP SIZE] Reason: {reduction_reason_ic}")
             max_step_tkl = max_step_tkl_reduced
             max_step_ic = max_step_ic_reduced
-    
+
     # Use the computed step sizes (either from relative error scaling or base value)
     max_lambda_step_size_tkl = max_step_tkl
     max_lambda_step_size_ic = max_step_ic
@@ -1541,6 +1586,18 @@ def reduce_and_update_both(
     Hlist_ic = np.stack(Hlist_ic, axis=0)       # (R, dmax, dmax)
     g_mean_ic = grads_ic.mean(axis=0)           # (dmax,)
     B_mean_ic = Hlist_ic.mean(axis=0)           # (dmax, dmax)
+
+    # Load current parameters for relative step capping
+    epsilon_old_path = _find_latest_epsilon(Path(epsilon_dir))
+    epsilon_old = np.load(epsilon_old_path)
+    if epsilon_old.shape != (K, K):
+        raise ValueError(f"epsilon_old shape {epsilon_old.shape} != ({K},{K})")
+    epsilon_vec, _ = _flatten_upper(epsilon_old)
+
+    lambda_old_path = _find_latest_lambda_IC(Path(lambda_dir))
+    lambda_old = np.load(lambda_old_path)
+    if lambda_old.shape[0] != dmax:
+        raise ValueError(f"lambda_old shape {lambda_old.shape} != ({dmax},)")
     
     # ========== Choose Update Strategy ==========
     if use_separate_updates:
@@ -1736,8 +1793,8 @@ def reduce_and_update_both(
             # CRITICAL: Re-apply step size constraint in parameter space after denormalization
             # The constraint was applied in normalized space, but after denormalization it may be violated
             # Use separate step sizes for TKL and IC (from relative error scaling)
-            max_change_per_param_tkl = max_lambda_step_size_tkl if max_lambda_step_size_tkl is not None else 0.5
-            max_change_per_param_ic = max_lambda_step_size_ic if max_lambda_step_size_ic is not None else 0.5
+            max_change_per_param_tkl = max_lambda_step_size_tkl
+            max_change_per_param_ic = max_lambda_step_size_ic
             max_proposed_change_tkl = np.max(np.abs(delta_vec_tkl))
             max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
             
@@ -1765,13 +1822,19 @@ def reduce_and_update_both(
                         max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
                         print(f"[ADAM] Balanced IC updates: scaled by {ic_compensation_scale:.2f} (norm_ratio={original_scale_ratio:.2f}, magnitude_ratio={magnitude_ratio:.2f})")
                         print(f"[ADAM] Update magnitudes after balancing: TKL={tkl_update_magnitude:.6f}, IC={max_proposed_change_ic:.6f}, ratio={tkl_update_magnitude/max_proposed_change_ic:.2f}")
+
+            # Relative step cap (RMS + per-parameter fraction of current params)
+            delta_vec_tkl = _apply_relative_step_cap(delta_vec_tkl, epsilon_vec, relstep_target_frac, relstep_max_frac, label="TKL")
+            delta_vec_ic = _apply_relative_step_cap(delta_vec_ic, lambda_old, relstep_target_frac, relstep_max_frac, label="IC")
+            max_proposed_change_tkl = np.max(np.abs(delta_vec_tkl))
+            max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
             
-            if max_proposed_change_tkl > max_change_per_param_tkl:
+            if max_change_per_param_tkl is not None and max_proposed_change_tkl > max_change_per_param_tkl:
                 scale_factor_tkl = max_change_per_param_tkl / max_proposed_change_tkl
                 delta_vec_tkl *= scale_factor_tkl
                 print(f"[ADAM] Re-applied step size constraint to TKL: {max_proposed_change_tkl:.6f} -> {np.max(np.abs(delta_vec_tkl)):.6f} (scale={scale_factor_tkl:.3f}, max_step={max_change_per_param_tkl:.6f})")
             
-            if max_proposed_change_ic > max_change_per_param_ic:
+            if max_change_per_param_ic is not None and max_proposed_change_ic > max_change_per_param_ic:
                 scale_factor_ic = max_change_per_param_ic / max_proposed_change_ic
                 delta_vec_ic *= scale_factor_ic
                 print(f"[ADAM] Re-applied step size constraint to IC: {max_proposed_change_ic:.6f} -> {np.max(np.abs(delta_vec_ic)):.6f} (scale={scale_factor_ic:.3f}, max_step={max_change_per_param_ic:.6f})")
@@ -1780,6 +1843,26 @@ def reduce_and_update_both(
             meta_tkl['max_proposed_change'] = float(np.max(np.abs(delta_vec_tkl)))
             meta_ic['max_proposed_change'] = float(np.max(np.abs(delta_vec_ic)))
         
+        else:
+            # No normalization path: apply relative cap and optional absolute cap
+            delta_vec_tkl = _apply_relative_step_cap(delta_vec_tkl, epsilon_vec, relstep_target_frac, relstep_max_frac, label="TKL")
+            delta_vec_ic = _apply_relative_step_cap(delta_vec_ic, lambda_old, relstep_target_frac, relstep_max_frac, label="IC")
+            max_proposed_change_tkl = np.max(np.abs(delta_vec_tkl))
+            max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
+
+            if max_lambda_step_size_tkl is not None and max_proposed_change_tkl > max_lambda_step_size_tkl:
+                scale_factor_tkl = max_lambda_step_size_tkl / max_proposed_change_tkl
+                delta_vec_tkl *= scale_factor_tkl
+                print(f"[ADAM] Re-applied step size constraint to TKL: {max_proposed_change_tkl:.6f} -> {np.max(np.abs(delta_vec_tkl)):.6f} (scale={scale_factor_tkl:.3f}, max_step={max_lambda_step_size_tkl:.6f})")
+
+            if max_lambda_step_size_ic is not None and max_proposed_change_ic > max_lambda_step_size_ic:
+                scale_factor_ic = max_lambda_step_size_ic / max_proposed_change_ic
+                delta_vec_ic *= scale_factor_ic
+                print(f"[ADAM] Re-applied step size constraint to IC: {max_proposed_change_ic:.6f} -> {np.max(np.abs(delta_vec_ic)):.6f} (scale={scale_factor_ic:.3f}, max_step={max_lambda_step_size_ic:.6f})")
+
+            meta_tkl['max_proposed_change'] = float(np.max(np.abs(delta_vec_tkl)))
+            meta_ic['max_proposed_change'] = float(np.max(np.abs(delta_vec_ic)))
+
         # Save Adam state for next iteration
         np.savez(adam_state_tkl_path, m=m_tkl_new, v=v_tkl_new)
         np.savez(adam_state_ic_path, m=m_ic_new, v=v_ic_new)
@@ -1827,20 +1910,24 @@ def reduce_and_update_both(
             delta_vec_ic = delta_vec_ic_raw / norm_factors_ic if norm_factors_ic > 1e-10 else delta_vec_ic_raw
             print(f"[NORMALIZATION] Denormalized updates: TKL scale=1/{norm_factors_tkl:.2e}, IC scale=1/{norm_factors_ic:.2e}")
             
+            # Relative step cap before applying adaptive gamma
+            delta_vec_tkl = _apply_relative_step_cap(delta_vec_tkl, epsilon_vec, relstep_target_frac, relstep_max_frac, label="TKL")
+            delta_vec_ic = _apply_relative_step_cap(delta_vec_ic, lambda_old, relstep_target_frac, relstep_max_frac, label="IC")
+            
             # Now compute adaptive_gamma in parameter space using denormalized updates
             # Use separate step sizes for TKL and IC (from relative error scaling)
-            max_change_per_param_tkl = max_lambda_step_size_tkl if max_lambda_step_size_tkl is not None else 0.5
-            max_change_per_param_ic = max_lambda_step_size_ic if max_lambda_step_size_ic is not None else 0.5
+            max_change_per_param_tkl = max_lambda_step_size_tkl
+            max_change_per_param_ic = max_lambda_step_size_ic
             max_proposed_change_tkl = np.max(np.abs(delta_vec_tkl))
             max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
             
             if max_proposed_change_tkl > 0:
-                adaptive_gamma_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, GAMMA)
+                adaptive_gamma_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, GAMMA) if max_change_per_param_tkl is not None else GAMMA
             else:
                 adaptive_gamma_tkl = GAMMA
             
             if max_proposed_change_ic > 0:
-                adaptive_gamma_ic = min(max_change_per_param_ic / max_proposed_change_ic, GAMMA)
+                adaptive_gamma_ic = min(max_change_per_param_ic / max_proposed_change_ic, GAMMA) if max_change_per_param_ic is not None else GAMMA
             else:
                 adaptive_gamma_ic = GAMMA
             
@@ -1855,23 +1942,26 @@ def reduce_and_update_both(
             # But we still need to check if it respects separate step sizes for TKL and IC
             delta_vec_tkl = delta_vec_tkl_raw
             delta_vec_ic = delta_vec_ic_raw
+            # Relative step cap before any extra constraint
+            delta_vec_tkl = _apply_relative_step_cap(delta_vec_tkl, epsilon_vec, relstep_target_frac, relstep_max_frac, label="TKL")
+            delta_vec_ic = _apply_relative_step_cap(delta_vec_ic, lambda_old, relstep_target_frac, relstep_max_frac, label="IC")
             max_proposed_change_tkl = np.max(np.abs(delta_vec_tkl))
             max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
             
             # Re-apply constraints with separate step sizes
-            max_change_per_param_tkl = max_lambda_step_size_tkl if max_lambda_step_size_tkl is not None else 0.5
-            max_change_per_param_ic = max_lambda_step_size_ic if max_lambda_step_size_ic is not None else 0.5
+            max_change_per_param_tkl = max_lambda_step_size_tkl
+            max_change_per_param_ic = max_lambda_step_size_ic
             
             adaptive_gamma_base = meta_joint.get('gamma_adaptive', GAMMA)
             
-            if max_proposed_change_tkl > max_change_per_param_tkl:
+            if max_change_per_param_tkl is not None and max_proposed_change_tkl > max_change_per_param_tkl:
                 adaptive_gamma_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, GAMMA)
                 delta_vec_tkl *= adaptive_gamma_tkl / adaptive_gamma_base
                 print(f"[NEWTON] Re-applied step size constraint to TKL: {max_proposed_change_tkl:.6f} -> {np.max(np.abs(delta_vec_tkl)):.6f} (max_step={max_change_per_param_tkl:.6f})")
             else:
                 adaptive_gamma_tkl = adaptive_gamma_base
             
-            if max_proposed_change_ic > max_change_per_param_ic:
+            if max_change_per_param_ic is not None and max_proposed_change_ic > max_change_per_param_ic:
                 adaptive_gamma_ic = min(max_change_per_param_ic / max_proposed_change_ic, GAMMA)
                 delta_vec_ic *= adaptive_gamma_ic / adaptive_gamma_base
                 print(f"[NEWTON] Re-applied step size constraint to IC: {max_proposed_change_ic:.6f} -> {np.max(np.abs(delta_vec_ic)):.6f} (max_step={max_change_per_param_ic:.6f})")
@@ -2057,6 +2147,10 @@ def parse_args():
                     help="Adam beta2 parameter (default: 0.999)")
     pr.add_argument("--adam-epsilon", type=float, default=None,
                     help="Adam epsilon parameter (default: 1e-8)")
+    pr.add_argument("--relstep-target-frac", type=float, default=None,
+                    help="Target RMS step as fraction of RMS(param) for relative capping")
+    pr.add_argument("--relstep-max-frac", type=float, default=None,
+                    help="Max per-parameter step as fraction of |param| (or RMS if param≈0)")
 
     return p.parse_args()
 
@@ -2132,7 +2226,9 @@ def main():
             adam_lr_ic=getattr(args, 'adam_lr_ic', None),
             adam_beta1=args.adam_beta1,
             adam_beta2=args.adam_beta2,
-            adam_epsilon=args.adam_epsilon
+            adam_epsilon=args.adam_epsilon,
+            relstep_target_frac=getattr(args, "relstep_target_frac", None),
+            relstep_max_frac=getattr(args, "relstep_max_frac", None)
         )
         print(f"[DONE] Wrote updated epsilon to: {epsilon_path}")
         print(f"[DONE] Wrote updated lambda_IC to: {lambda_path}")
