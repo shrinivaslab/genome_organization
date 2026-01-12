@@ -586,8 +586,10 @@ class Chromosome(object):
             Name for the force.
         """
         # Energy expression mirrors OpenMiChroM addIdealChromosome (gamma-form)
+        # Note: step(d-dinit) ensures d >= dinit (so d >= 3, avoiding log(1)=0 issue)
+        # step(r-lim) ensures r >= lim (minimum distance cutoff, prevents infinite forces at r=0)
         energy_expr = (
-            "step(d-dinit)*(gamma1/log(d) + gamma2/d + gamma3/d^2)*step(dend-d)*f;"
+            "step(d-dinit)*(gamma1/log(d) + gamma2/d + gamma3/d^2)*step(dend-d)*f*step(r-lim);"
             "f=0.5*(1. + tanh(mu*(rc - r)));"
             "d=abs(idx2-idx1)"
         )
@@ -607,6 +609,7 @@ class Chromosome(object):
         force.addGlobalParameter('dend', float(d_end))
         force.addGlobalParameter('mu', float(mu))
         force.addGlobalParameter('rc', float(rc))
+        force.addGlobalParameter('lim', 1.0)  # Minimum distance cutoff (prevents infinite forces at r=0)
 
         # Per-particle parameter for index
         force.addPerParticleParameter("idx")
