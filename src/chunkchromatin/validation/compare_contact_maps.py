@@ -12,7 +12,7 @@ bin counts per chromosome, based on chain definitions in the config file.
 Config file requirements:
 - simulation.chains: List of [start, end, is_ring] tuples defining chains
 - chromosomes: List of chromosome names matching chain order (e.g., ['chr4', 'chr13', 'chr17'])
-- bin_size_bp: Resolution in basepairs (default: 100000)
+- bin_size_bp: Optional resolution hint in basepairs (will use closest matching resolution from mcool file)
 
 The script assumes the simulated contact map is at monomer resolution (1 monomer = 1 bin).
 If your contact map is at a different resolution, ensure chains and bin counts are
@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import yaml
 import cooler
+import h5py
 from pathlib import Path
 from typing import Sequence, Tuple
 
@@ -37,10 +38,11 @@ def load_config(config_path: str) -> dict:
 def get_experimental_bin_counts(
     mcool_path: str,
     chroms: Sequence[str],
-    resolution: int,
-) -> dict:
+    resolution: int = None,
+) -> Tuple[dict, int]:
     """
     Get bin counts per chromosome from experimental .mcool file.
+    Also returns the actual resolution (bin size) used from the mcool file.
     
     Parameters
     ----------
@@ -48,15 +50,38 @@ def get_experimental_bin_counts(
         Path to experimental .mcool file
     chroms : Sequence[str]
         List of chromosome names (e.g., ['chr4', 'chr13', 'chr17'])
-    resolution : int
-        Resolution in basepairs (e.g., 100000)
+    resolution : int, optional
+        Desired resolution in basepairs (e.g., 100000). If None, uses the finest
+        available resolution. If specified, finds the closest matching resolution.
     
     Returns
     -------
-    dict
-        Dictionary mapping chromosome name to bin count
+    tuple
+        (chrom_bin_counts, actual_resolution) where:
+        - chrom_bin_counts: dict mapping chromosome name to bin count
+        - actual_resolution: int, the actual resolution (bin size) in bp used from mcool
     """
-    clr = cooler.Cooler(f"{mcool_path}::resolutions/{resolution}")
+    # Get available resolutions from mcool file
+    # mcool files store resolutions in the HDF5 structure
+    available_resolutions = []
+    with h5py.File(mcool_path, 'r') as f:
+        if 'resolutions' in f:
+            available_resolutions = sorted([int(r) for r in f['resolutions'].keys()])
+    
+    if not available_resolutions:
+        raise ValueError(f"No resolutions found in mcool file: {mcool_path}")
+    
+    if resolution is None:
+        # Use finest resolution if not specified
+        actual_resolution = min(available_resolutions)
+    else:
+        # Find closest matching resolution
+        actual_resolution = min(available_resolutions, key=lambda x: abs(x - resolution))
+        if actual_resolution != resolution:
+            print(f"Warning: Requested resolution {resolution} bp not found. "
+                  f"Using closest available: {actual_resolution} bp")
+    
+    clr = cooler.Cooler(f"{mcool_path}::resolutions/{actual_resolution}")
     bins_df = clr.bins()[:]
     
     chrom_bin_counts = {}
@@ -64,7 +89,7 @@ def get_experimental_bin_counts(
         chrom_mask = bins_df['chrom'] == chrom
         chrom_bin_counts[chrom] = int(chrom_mask.sum())
     
-    return chrom_bin_counts
+    return chrom_bin_counts, actual_resolution
 
 
 def trim_simulated_contact_map(
@@ -141,6 +166,47 @@ def trim_simulated_contact_map(
         print(f"Original shape: {sim_cmap.shape}, Trimmed shape: {trimmed_cmap.shape}")
     
     return trimmed_cmap
+
+
+def coarse_grain_contact_map(
+    matrix: np.ndarray,
+    factor: int,
+) -> np.ndarray:
+    """
+    Coarse-grain a contact map by averaging non-overlapping factor×factor blocks.
+
+    This is used to go from per-monomer (e.g. 100 kb) resolution to a coarser
+    resolution (e.g. 500 kb) while preserving total genomic span.
+
+    Parameters
+    ----------
+    matrix : np.ndarray
+        Square contact matrix at fine resolution.
+    factor : int
+        Coarse-graining factor (e.g. 5 to aggregate 5×5 blocks).
+
+    Returns
+    -------
+    np.ndarray
+        Coarse-grained contact matrix of shape (N/factor, N/factor).
+    """
+    if factor == 1:
+        return matrix
+
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("Input contact map must be a square matrix")
+
+    n = matrix.shape[0]
+    if n % factor != 0:
+        raise ValueError(
+            f"Matrix size {n} is not divisible by coarse-graining factor {factor}"
+        )
+
+    new_n = n // factor
+    # Reshape into (new_n, factor, new_n, factor) and average over the fine axes
+    reshaped = matrix.reshape(new_n, factor, new_n, factor)
+    coarse = reshaped.mean(axis=(1, 3))
+    return coarse
 
 
 def row_max_normalize(matrix: np.ndarray) -> np.ndarray:
@@ -461,16 +527,36 @@ def compare_contact_maps(
             "The order must match the order of chains in simulation.chains."
         )
     
-    bin_size_bp = config.get('bin_size_bp', 100000)
-    if verbose:
-        print(f"Chains: {len(chains)}, Chromosomes: {chroms}, Bin size: {bin_size_bp} bp")
+    # Get bin size hint from config (optional, for finding closest resolution)
+    # This is the *target* comparison bin size (e.g. 500000 for 500 kb).
+    bin_size_hint = config.get('bin_size_bp', None)
+    # Simulation monomer size (fine resolution of simulated contact map), default 100 kb.
+    sim_bin_size_bp = config.get('simulation_bin_size_bp', 100_000)
     
-    # Get experimental bin counts from .mcool
+    # Get experimental bin counts from .mcool (this also returns the actual bin size)
     if verbose:
         print(f"Loading experimental bin counts from {exp_mcool_path}")
-    exp_bin_counts = get_experimental_bin_counts(exp_mcool_path, chroms, bin_size_bp)
+    exp_bin_counts, bin_size_bp = get_experimental_bin_counts(
+        exp_mcool_path, chroms, resolution=bin_size_hint
+    )
     if verbose:
+        print(f"Chains: {len(chains)}, Chromosomes: {chroms}")
+        print(f"Experimental bin size (from mcool): {bin_size_bp} bp")
         print(f"Experimental bin counts: {exp_bin_counts}")
+
+    # Determine coarse-graining factor between simulation monomer resolution
+    # and comparison / experimental bin size.
+    if bin_size_bp % sim_bin_size_bp != 0:
+        raise ValueError(
+            f"Experimental bin size {bin_size_bp} is not an integer multiple of "
+            f"simulation bin size {sim_bin_size_bp}"
+        )
+    cg_factor = bin_size_bp // sim_bin_size_bp
+    if verbose:
+        print(
+            f"Simulation bin size: {sim_bin_size_bp} bp, "
+            f"coarse-graining factor: {cg_factor}"
+        )
     
     # Load simulated contact map
     if verbose:
@@ -481,13 +567,33 @@ def compare_contact_maps(
     else:
         sim_cmap = np.load(sim_cmap_path)
     if verbose:
-        print(f"Simulated contact map shape: {sim_cmap.shape}")
-    
-    # Trim simulated contact map to match experimental bin counts
+        print(f"Simulated contact map shape (fine resolution): {sim_cmap.shape}")
+
+    # Coarse-grain simulated contact map from fine (e.g. 100 kb) to comparison
+    # resolution (e.g. 500 kb) by averaging cg_factor×cg_factor blocks.
+    if verbose and cg_factor != 1:
+        print("Coarse-graining simulated contact map to comparison resolution...")
+    sim_cmap_coarse = coarse_grain_contact_map(sim_cmap, cg_factor)
+    if verbose:
+        print(f"Simulated contact map shape (coarse): {sim_cmap_coarse.shape}")
+
+    # Adjust chain definitions to coarse-grained coordinates
+    chains_coarse: Sequence[Tuple[int, int, bool]] = []
+    for start, end, is_ring in chains:
+        length = end - start
+        if length % cg_factor != 0:
+            raise ValueError(
+                f"Chain [{start}, {end}] length {length} is not divisible by "
+                f"coarse-graining factor {cg_factor}"
+            )
+        chains_coarse.append((start // cg_factor, end // cg_factor, is_ring))
+    chains = list(chains_coarse)
+
+    # Trim coarse-grained simulated contact map to match experimental bin counts
     if verbose:
         print("Trimming simulated contact map...")
     sim_cmap_trimmed = trim_simulated_contact_map(
-        sim_cmap, chains, chroms, exp_bin_counts, verbose=verbose
+        sim_cmap_coarse, chains, chroms, exp_bin_counts, verbose=verbose
     )
     
     # Load experimental contact map

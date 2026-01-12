@@ -35,6 +35,7 @@ export MAXENT_CHAINS='{chains}'
 export MAXENT_MONOMER_TYPES="{monomer_types}"
 export MAXENT_D_INIT="{d_init}"
 export MAXENT_D_END="{d_end}"
+export MAXENT_FORCE_KWARGS='{force_kwargs}'
 
 # Compute replicate range for this array task
 TASK_ID="${{SLURM_ARRAY_TASK_ID}}"
@@ -58,4 +59,3 @@ python "{series_runner}" \
   --runner "{run_replicates_array}" \
   --start "${{START}}" \
   --end   "${{END}}"
-

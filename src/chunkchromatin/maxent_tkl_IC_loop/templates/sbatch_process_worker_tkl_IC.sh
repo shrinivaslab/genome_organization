@@ -39,6 +39,7 @@ output_dir="{obs_dir}"
 monomer_types="{monomer_types}"
 exp_tkl="{exp_tkl}"
 exp_phi_IC="{exp_phi_IC}"
+chains='{chains}'
 
 # Optional kernel flags (string may be empty)
 kernel_cli="{kernel_cli}"
@@ -59,6 +60,7 @@ python "{process_tkl_IC_update}" worker \
   --exp-phi-IC     "${{exp_phi_IC}}" \
   --d-init         "{d_init}" \
   --d-end          "{d_end}" \
+  --chains         "${{chains}}" \
   --array-index    "${{MAXENT_PROCESS_INDEX}}" \
   --array-count    "${{MAXENT_PROCESS_COUNT}}" \
   --n-total-reps   "${{MAXENT_N_REPLICATES}}" \
@@ -66,4 +68,3 @@ python "{process_tkl_IC_update}" worker \
   --io-k           "{io_k}" \
   ${{kernel_cli}} \
   ${{resolution_cli}}
-

@@ -74,6 +74,7 @@ def main():
     per_task = int(sim_res.get("per_task_replicates", 1))
     array_len = int(sim_res["array_len"])
     sim_script_tpl = (tpl_dir / "sbatch_sim_array_tkl_IC.sh")
+    force_kwargs_json = json.dumps(cfg.get("force_kwargs", {}))
     sim_script_text = sim_script_tpl.read_text().format(
         job_name=f"{args.name}_sim_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -105,6 +106,7 @@ def main():
         per_task_reps=per_task,
         d_init=d_init,
         d_end=d_end,
+        force_kwargs=force_kwargs_json,
     )
     sim_sbatch = iterd / "sims" / "submit_sim_array.sh"
     sim_sbatch.write_text(sim_script_text); make_executable(sim_sbatch)
@@ -149,6 +151,7 @@ def main():
         kernel_cli=kernel_cli.strip(),
         d_init=d_init,
         d_end=d_end,
+        chains=json.dumps(cfg["simulation"]["chains"]),
         resolution=inputs.get("resolution", ""),
     )
     procw_sbatch = iterd / "obs" / "submit_process_worker.sh"

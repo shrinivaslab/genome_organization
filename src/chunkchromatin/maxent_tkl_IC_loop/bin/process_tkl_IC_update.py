@@ -100,6 +100,21 @@ def _flatten_upper(M):
     iu = np.triu_indices(M.shape[0])
     return M[iu], iu
 
+def _type_pair_denominators(counts, include_diag):
+    K = counts.shape[0]
+    denom = np.zeros((K, K), dtype=float)
+    for k in range(K):
+        for l in range(k, K):
+            if k == l:
+                if include_diag:
+                    denom[k, l] = counts[k] * (counts[k] + 1) / 2.0
+                else:
+                    denom[k, l] = counts[k] * (counts[k] - 1) / 2.0
+            else:
+                denom[k, l] = counts[k] * counts[l]
+    denom = denom + np.triu(denom, k=1).T
+    return denom
+
 def _compute_monomer_contact_matrix(positions, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None):
     """
     Compute average N×N monomer-level contact matrix across all frames.
@@ -195,6 +210,9 @@ def _covariance_pass_upper(positions, monomer_types, mu=MU_DEFAULT, rc=RC_DEFAUL
     acc = UpperTriOnlineCov(K)
     if rcut is None:
         rcut = rc + 4.0 / mu
+    counts = np.bincount(inv, minlength=K)
+    denom = _type_pair_denominators(counts, include_diag=True)
+    f0 = f_switch(0.0, mu=mu, rc=rc)
 
     iuK = np.triu_indices(K)
     for f in range(F):
@@ -212,7 +230,9 @@ def _covariance_pass_upper(positions, monomer_types, mu=MU_DEFAULT, rc=RC_DEFAUL
             l = np.maximum(ti, tj)
             flat = k * K + l
             sums = np.bincount(flat, weights=fij, minlength=K*K).reshape(K, K)
-            T_up[iuK] = sums[iuK]
+            sums[np.diag_indices(K)] += counts * f0
+            with np.errstate(divide='ignore', invalid='ignore'):
+                T_up[iuK] = np.where(denom[iuK] > 0, sums[iuK] / denom[iuK], 0.0)
         acc.add_frame_from_upper_mat(T_up)
 
     return acc.finalize(beta=1.0) + (type_labels,)
@@ -266,6 +286,9 @@ def _covariance_pass_upper_500kb(
     monomer_types_500 = monomer_types[::block_size]
     type_labels, inv_500 = np.unique(monomer_types_500, return_inverse=True)
     K = len(type_labels)
+    counts_500 = np.bincount(inv_500, minlength=K)
+    denom_500 = _type_pair_denominators(counts_500, include_diag=True)
+    f0 = f_switch(0.0, mu=mu, rc=rc)
 
     acc = UpperTriOnlineCov(K)
     iuK = np.triu_indices(K)
@@ -299,6 +322,10 @@ def _covariance_pass_upper_500kb(
             diag_idx = np.diag_indices(N_500)
             B[diag_idx] = sums[diag_idx]
 
+        # Add self-contact on the diagonal to match MiChroM's inclusion of i==j
+        diag_idx = np.diag_indices(N_500)
+        B[diag_idx] += f0
+
         # Row-normalize so each row's max is 1 (if any contacts exist)
         row_max = B.max(axis=1, keepdims=True)
         row_max = np.where(row_max > 0.0, row_max, 1.0)
@@ -322,7 +349,8 @@ def _covariance_pass_upper_500kb(
                 weights=weights,
                 minlength=K * K
             ).reshape(K, K)
-            T_frame[iuK] = sums_types[iuK]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                T_frame[iuK] = np.where(denom_500[iuK] > 0, sums_types[iuK] / denom_500[iuK], 0.0)
 
         acc.add_frame_from_upper_mat(T_frame)
 
@@ -495,7 +523,33 @@ class PhiICOnlineCov:
         hess = (beta**2) * cov
         return self.mean.copy(), cov, hess
 
-def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None):
+def _normalize_chains(chains, n_particles):
+    if not chains:
+        return [(0, n_particles, False)]
+    norm = []
+    for entry in chains:
+        if len(entry) == 2:
+            start, end = entry
+            is_ring = False
+        else:
+            start, end, is_ring = entry
+        end = n_particles if end is None else end
+        norm.append((int(start), int(end), bool(is_ring)))
+    return norm
+
+def _ic_denominator(chains, d_init, d_end):
+    dmax = d_end - d_init
+    denom = np.zeros(dmax, dtype=float)
+    for start, end, _ in chains:
+        chain_len = end - start
+        if chain_len <= d_init:
+            continue
+        max_d = min(d_end, chain_len)
+        ds = np.arange(d_init, max_d, dtype=int)
+        denom[ds - d_init] += (chain_len - ds)
+    return denom
+
+def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None, chains=None):
     """
     Compute phi_IC[d] from positions for all frames (OPTIMIZED VERSION).
     
@@ -531,10 +585,15 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
         rcut = rc + 4.0 / mu
     
     phi_frames = np.zeros((F, dmax), dtype=float)
-    
-    # Pre-allocate arrays for vectorized diagonal extraction
-    # For each genomic distance d, we need to track which pairs (i,j) have |j-i| = d
-    d_values = np.arange(d_init, d_end)
+
+    norm_chains = _normalize_chains(chains, N)
+    denom = _ic_denominator(norm_chains, d_init, d_end)
+    if np.all(denom == 0):
+        return phi_frames
+
+    chain_id = np.full(N, -1, dtype=int)
+    for cid, (start, end, _) in enumerate(norm_chains):
+        chain_id[start:end] = cid
     
     for f in range(F):
         X = positions[f]
@@ -549,6 +608,12 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
         
         i = pairs[:, 0]
         j = pairs[:, 1]
+
+        same_chain = (chain_id[i] == chain_id[j]) & (chain_id[i] >= 0)
+        if not np.any(same_chain):
+            continue
+        i = i[same_chain]
+        j = j[same_chain]
         
         # Compute distances and contact probabilities only for nearby pairs
         rij = np.linalg.norm(X[i] - X[j], axis=1)
@@ -569,19 +634,18 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
             genomic_dists_valid = genomic_dists[valid_mask]
             fij_valid = fij[valid_mask]
             
-            # Use bincount to sum fij for each genomic distance, then divide by counts
-            # Shift indices so d_init maps to 0
+            # Use bincount to sum fij for each genomic distance.
+            # Shift indices so d_init maps to 0.
             dist_indices = genomic_dists_valid - d_init
             sums = np.bincount(dist_indices, weights=fij_valid, minlength=dmax)
-            counts = np.bincount(dist_indices, minlength=dmax)
             
-            # Compute means (avoid division by zero)
+            # Compute means over all intra-chain pairs (pairs beyond rcut contribute 0)
             with np.errstate(divide='ignore', invalid='ignore'):
-                phi_frames[f, :] = np.where(counts > 0, sums / counts, 0.0)
+                phi_frames[f, :] = np.where(denom > 0, sums / denom, 0.0)
     
     return phi_frames
 
-def process_one_replicate_IC(positions, exp_phi_IC_path, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=RCUT_DEFAULT, beta=BETA_DEFAULT):
+def process_one_replicate_IC(positions, exp_phi_IC_path, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=RCUT_DEFAULT, beta=BETA_DEFAULT, chains=None):
     """
     Process one replicate to compute phi_sim, grad, and Hess for IC optimization.
     
@@ -597,7 +661,7 @@ def process_one_replicate_IC(positions, exp_phi_IC_path, d_init, d_end, mu=MU_DE
     
     # Compute phi[d] for each frame
     phi_frames = _compute_phi_IC_from_positions(
-        positions, d_init, d_end, mu=mu, rc=rc, rcut=rcut
+        positions, d_init, d_end, mu=mu, rc=rc, rcut=rcut, chains=chains
     )
     
     # Accumulate mean and covariance
@@ -1232,9 +1296,9 @@ def _apply_relative_step_cap(delta_vec, param_vec, target_rms_frac=None, max_fra
 # Combined worker function
 # ==========================
 def _process_replicate_entry_tkl_IC(
-    rep_idx, 
-    replicate_root, 
-    output_dir, 
+    rep_idx,
+    replicate_root,
+    output_dir,
     monomer_types,
     exp_Tkl_path,
     exp_phi_IC_path,
@@ -1245,7 +1309,8 @@ def _process_replicate_entry_tkl_IC(
     rcut, 
     beta, 
     manifest_path, 
-    resolution=None
+    resolution=None,
+    chains=None
 ):
     """
     Process one replicate to compute both TKL and IC observables from the same trajectory.
@@ -1306,7 +1371,8 @@ def _process_replicate_entry_tkl_IC(
                 exp_phi_IC_path=exp_phi_IC_path,
                 d_init=d_init,
                 d_end=d_end,
-                mu=mu, rc=rc, rcut=rcut, beta=beta
+                mu=mu, rc=rc, rcut=rcut, beta=beta,
+                chains=chains
             )
         
         compute_s = time.time() - t_comp0
@@ -2122,6 +2188,8 @@ def parse_args():
     pw.add_argument("--rc", type=float, default=RC_DEFAULT)
     pw.add_argument("--rcut", type=float, default=RCUT_DEFAULT)
     pw.add_argument("--beta", type=float, default=BETA_DEFAULT)
+    pw.add_argument("--chains", type=str, default=None,
+                    help="JSON list of (start, end, is_ring) chain tuples (end is exclusive)")
     pw.add_argument("--resolution", type=str, default=None, 
                     help="Observable resolution: None (default) for K×K type-averaged observables, '500kb' for (N/5)×(N/5) monomer-resolution observables")
 
@@ -2181,6 +2249,7 @@ def main():
 
         # Load monomer types once
         monomer_types = np.load(args.monomer_types)
+        chains = json.loads(args.chains) if args.chains else None
 
         os.environ["OMP_NUM_THREADS"] = "1"
         os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -2208,6 +2277,7 @@ def main():
                     mu=args.mu, rc=args.rc, rcut=args.rcut, beta=args.beta,
                     manifest_path=manifest_path,
                     resolution=args.resolution,
+                    chains=chains,
                 ),
                 targets,
                 chunksize=1,
