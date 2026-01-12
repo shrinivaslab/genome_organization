@@ -379,6 +379,7 @@ def main():
         d_init=d_init,
         d_end=d_end,
         resolution=inputs.get("resolution", ""),
+        chains=json.dumps(cfg["simulation"]["chains"]),
     )
     procw_sbatch = iterd / "obs" / "submit_process_worker.sh"
     procw_sbatch.write_text(procw_text)
