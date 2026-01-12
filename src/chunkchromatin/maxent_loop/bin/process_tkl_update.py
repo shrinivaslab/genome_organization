@@ -68,6 +68,21 @@ def _flatten_upper(M):
     iu = np.triu_indices(M.shape[0])
     return M[iu], iu
 
+def _type_pair_denominators(counts, include_diag):
+    K = counts.shape[0]
+    denom = np.zeros((K, K), dtype=float)
+    for k in range(K):
+        for l in range(k, K):
+            if k == l:
+                if include_diag:
+                    denom[k, l] = counts[k] * (counts[k] + 1) / 2.0
+                else:
+                    denom[k, l] = counts[k] * (counts[k] - 1) / 2.0
+            else:
+                denom[k, l] = counts[k] * counts[l]
+    denom = denom + np.triu(denom, k=1).T
+    return denom
+
 def _compute_monomer_contact_matrix(positions, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None):
     """
     Compute average N×N monomer-level contact matrix across all frames.
@@ -163,6 +178,9 @@ def _covariance_pass_upper(positions, monomer_types, mu=MU_DEFAULT, rc=RC_DEFAUL
     acc = UpperTriOnlineCov(K)
     if rcut is None:
         rcut = rc + 4.0 / mu
+    counts = np.bincount(inv, minlength=K)
+    denom = _type_pair_denominators(counts, include_diag=True)
+    f0 = f_switch(0.0, mu=mu, rc=rc)
 
     iuK = np.triu_indices(K)
     for f in range(F):
@@ -180,7 +198,9 @@ def _covariance_pass_upper(positions, monomer_types, mu=MU_DEFAULT, rc=RC_DEFAUL
             l = np.maximum(ti, tj)
             flat = k * K + l
             sums = np.bincount(flat, weights=fij, minlength=K*K).reshape(K, K)
-            T_up[iuK] = sums[iuK]
+            sums[np.diag_indices(K)] += counts * f0
+            with np.errstate(divide='ignore', invalid='ignore'):
+                T_up[iuK] = np.where(denom[iuK] > 0, sums[iuK] / denom[iuK], 0.0)
         acc.add_frame_from_upper_mat(T_up)
 
     return acc.finalize(beta=1.0) + (type_labels,)
@@ -235,6 +255,9 @@ def _covariance_pass_upper_500kb(
     monomer_types_500 = monomer_types[::block_size]
     type_labels, inv_500 = np.unique(monomer_types_500, return_inverse=True)
     K = len(type_labels)
+    counts_500 = np.bincount(inv_500, minlength=K)
+    denom_500 = _type_pair_denominators(counts_500, include_diag=True)
+    f0 = f_switch(0.0, mu=mu, rc=rc)
 
     acc = UpperTriOnlineCov(K)
     iuK = np.triu_indices(K)
@@ -268,6 +291,10 @@ def _covariance_pass_upper_500kb(
             diag_idx = np.diag_indices(N_500)
             B[diag_idx] = sums[diag_idx]
 
+        # Add self-contact on the diagonal to match MiChroM's inclusion of i==j
+        diag_idx = np.diag_indices(N_500)
+        B[diag_idx] += f0
+
         # Row-normalize so each row's max is 1 (if any contacts exist)
         row_max = B.max(axis=1, keepdims=True)
         row_max = np.where(row_max > 0.0, row_max, 1.0)
@@ -291,7 +318,8 @@ def _covariance_pass_upper_500kb(
                 weights=weights,
                 minlength=K * K
             ).reshape(K, K)
-            T_frame[iuK] = sums_types[iuK]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                T_frame[iuK] = np.where(denom_500[iuK] > 0, sums_types[iuK] / denom_500[iuK], 0.0)
 
         acc.add_frame_from_upper_mat(T_frame)
 

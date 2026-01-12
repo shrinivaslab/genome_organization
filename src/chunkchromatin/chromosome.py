@@ -537,6 +537,185 @@ class Chromosome(object):
         # Add all particles with their index
         for i in range(sim_object.N):
             force.addParticle([float(i)])
+
+        # Restrict IC interactions to within each chain only
+        for start, end, _ in self.chains:
+            end = sim_object.N if end is None else end
+            if end <= start:
+                continue
+            group = list(range(start, end))
+            force.addInteractionGroup(group, group)
+        
+        return force
+
+    def add_ideal_chromosome_gamma_force(
+        self,
+        sim_object,
+        gamma1=-0.030,
+        gamma2=-0.351,
+        gamma3=-3.727,
+        d_init=3,
+        d_end=500,
+        mu=4.22,
+        rc=1.82,
+        rCutoff=3.0,
+        name="ideal_chromosome_gamma_force"
+    ):
+        """
+        Ideal chromosome (gamma-form) potential using:
+            gamma(d) = gamma1/log(d) + gamma2/d + gamma3/d^2
+        and f(r) = 0.5 * (1 + tanh(mu * (rc - r))).
+
+        Parameters
+        ----------
+        sim_object : Simulation
+            Must have attributes: N (int), conlen (float), kT (float).
+        gamma1, gamma2, gamma3 : float
+            MiChroM gamma parameters (in kT units).
+        d_init : int
+            Minimum genomic distance to consider (in bins, default 3).
+        d_end : int
+            Maximum genomic distance to consider (in bins, default 500).
+        mu : float
+            Tanh kernel parameter (default 4.22).
+        rc : float
+            Tanh kernel parameter (default 1.82).
+        rCutoff : float
+            Cutoff distance in reduced units (default 3.0).
+        name : str
+            Name for the force.
+        """
+        # Energy expression mirrors OpenMiChroM addIdealChromosome (gamma-form)
+        energy_expr = (
+            "step(d-dinit)*(gamma1/log(d) + gamma2/d + gamma3/d^2)*step(dend-d)*f;"
+            "f=0.5*(1. + tanh(mu*(rc - r)));"
+            "d=abs(idx2-idx1)"
+        )
+
+        force = mm.CustomNonbondedForce(energy_expr)
+        force.setForceGroup(4)  # Align with IC force group usage
+        force.name = name
+        force.setCutoffDistance(rCutoff * sim_object.conlen)
+        force.setNonbondedMethod(mm.CustomNonbondedForce.CutoffNonPeriodic)
+
+        # Convert gamma parameters from kT to kJ/mol
+        kT_kJmol = sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
+        force.addGlobalParameter('gamma1', float(gamma1) * kT_kJmol)
+        force.addGlobalParameter('gamma2', float(gamma2) * kT_kJmol)
+        force.addGlobalParameter('gamma3', float(gamma3) * kT_kJmol)
+        force.addGlobalParameter('dinit', float(d_init))
+        force.addGlobalParameter('dend', float(d_end))
+        force.addGlobalParameter('mu', float(mu))
+        force.addGlobalParameter('rc', float(rc))
+
+        # Per-particle parameter for index
+        force.addPerParticleParameter("idx")
+        for i in range(sim_object.N):
+            force.addParticle([float(i)])
+
+        # Restrict IC interactions to within each chain only
+        for start, end, _ in self.chains:
+            end = sim_object.N if end is None else end
+            if end <= start:
+                continue
+            group = list(range(start, end))
+            force.addInteractionGroup(group, group)
+
+        return force
+
+    def add_loops(
+        self,
+        sim_object,
+        looplists,
+        mu=3.22,
+        rc=1.78,
+        X=-1.612990,
+        name="loops"
+    ):
+        """
+        Adds loop interactions using the tanh distance kernel.
+        
+        Loop potential: U = qsi * 0.5 * (1 + tanh(mu * (rc - r)))
+        where qsi (X) is the loop interaction parameter.
+        
+        Parameters
+        ----------
+        sim_object : Simulation
+            Must have attributes: N (int), conlen (float), kT (float).
+        looplists : list[str] or str
+            List of file paths containing loop information. Each file should be
+            a two-column text file with indices i and j of loop anchor pairs.
+            For multi-chain simulations, the order should match self.chains.
+            If a single string is provided, it will be converted to a list.
+        mu : float
+            Parameter in the tanh distance kernel (default 3.22).
+        rc : float
+            Parameter in the tanh distance kernel (default 1.78).
+        X : float
+            Loop interaction parameter (default -1.612990, in kT units).
+        name : str
+            Name for the force.
+        
+        Returns
+        -------
+        CustomBondForce
+            The loop force object.
+        """
+        # Handle single string input
+        if isinstance(looplists, str):
+            looplists = [looplists]
+        
+        # Validate looplists length matches chains
+        if len(looplists) != len(self.chains):
+            raise ValueError(
+                f"Number of loop files ({len(looplists)}) must match "
+                f"number of chains ({len(self.chains)})"
+            )
+        
+        # Read loop positions and offset by chain start
+        loop_positions = []
+        for loop_file, chain in zip(looplists, self.chains):
+            start_idx = int(chain[0])
+            try:
+                with open(loop_file, 'r') as f:
+                    lines = f.read().splitlines()
+                for line in lines:
+                    if not line.strip():  # Skip empty lines
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        i = int(parts[0]) + start_idx
+                        j = int(parts[1]) + start_idx
+                        loop_positions.append([i, j])
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Loop file not found: {loop_file}")
+        
+        # Energy expression matching benchmark
+        energy_expr = "qsi*0.5*(1. + tanh(mu*(rc - r)))"
+        
+        # Create CustomBondForce
+        force = mm.CustomBondForce(energy_expr)
+        force.name = name
+        
+        # Convert X from kT to kJ/mol
+        kT_kJmol = sim_object.kT.value_in_unit(unit.kilojoule_per_mole)
+        
+        # Add global parameters (CustomBondForce uses addGlobalParameter directly)
+        force.addGlobalParameter('mu', float(mu))
+        force.addGlobalParameter('rc', float(rc))
+        force.addGlobalParameter('qsi', float(X) * kT_kJmol)
+        
+        # Add bonds (convert from 1-indexed to 0-indexed: p[0]-1, p[1]-1)
+        for pair in loop_positions:
+            i = int(pair[0]) - 1
+            j = int(pair[1]) - 1
+            # Validate indices
+            if i < 0 or j < 0 or i >= sim_object.N or j >= sim_object.N:
+                raise ValueError(
+                    f"Loop pair [{pair[0]}, {pair[1]}] results in out-of-bounds "
+                    f"indices [{i}, {j}] for system with {sim_object.N} particles"
+                )
+            force.addBond(i, j)
         
         return force
 
@@ -657,4 +836,3 @@ class Chromosome(object):
         # Add the global parameter with the new unique name
         force.addGlobalParameter(unique_name, value)
         return unique_name
-

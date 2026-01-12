@@ -1,0 +1,125 @@
+# MaxEnt combined TKL and IC loop configuration (L2 norm, relative cap tuned for 50 reps)
+# This run keeps L2 normalization, removes hard absolute step clamps, and uses a
+# slightly looser relative cap to let IC move more while keeping TKL stable.
+
+slurm:
+  account: "p32733"
+  partition: "short"
+  time_limit: "4:00:00"
+  cpus_per_task: 7
+  mem: "25G"
+  constraint: null
+  qos: null
+
+simulation:
+  n_replicates: 50          # reduced from 80 back to 50
+  frames: 4000
+  burnin_frames: 400
+  save_frames: true
+  seeds_base: 177013
+  n_types: 5
+  N: 1570
+  density: 0.33
+  chains:
+    - [0, 1570, false]
+  initialization_method: "random_walk"
+
+ideal_chromosome:
+  d_init: 3
+  d_end: 300
+
+force_kwargs:
+  harmonic_bonds:
+    bondWiggleDistance: 0.10
+    bondLength: 1.0
+  angle_force:
+    k: 2.0
+    theta_0: 3.141592653589793
+  spherical_confinement:
+    r: "density"
+    density: 0.10
+    k: 1.5
+    center: [0.0, 0.0, 0.0]
+    invert: false
+    particles: null
+    name: "spherical_confinement"
+  polynomial_repulsive:
+    trunc: 3
+    radiusMult: 1
+    name: "polynomial_repulsive"
+
+update:
+  method: "adam"
+  max_lambda_step_size: null      # no hard absolute clamp; use relative caps
+  gradient_normalization: "L2"
+  relative_step:
+    target_rms_frac: 0.015        # ~1.5% RMS step; a bit looser than previous 1%
+    max_frac: 0.05                # per-parameter cap ~5% of |param| (or RMS if near zero)
+  adaptive_step_size:
+    relative_error_scaling: true
+    reference_threshold: 50.0
+    min_scale_factor: 0.001
+    max_scale_factor: 1.0         # no up-scaling
+    scaling_function: "sqrt"
+    reduce_when_relative_error_below: 100.0
+    reduction_factor: 0.7
+    reduce_when_loss_plateau: true
+    plateau_patience: 1
+    exponential_decay: true
+    decay_rate: 0.95
+    decay_relative_error_threshold: 150.0
+    min_step_size: 0.000001
+  adam:
+    learning_rate: 0.005          # TKL LR (kept conservative)
+    learning_rate_ic: 0.003       # IC LR (conservative; relative cap provides room to move)
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1e-8
+
+convergence:
+  max_abs_residual: 1.0e-3
+  l2_residual: 5.0e-3
+  max_param_step: 1.0e-4
+  consecutive: 2
+
+processing_inputs:
+  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr4.npy"
+  exp_tkl: "/projects/p32733/ME/experimental_data/chr_4_500mb_Tkl_exp_interpolated.npy"
+  exp_phi_IC: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+  # Use latest TKL (from tkl_IC_opt_L2_chr4_5) and a strong IC from IC-only run
+  epsilon_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/tkl_IC_opt_L2_chr4_5/iter_008/params/epsilon.npy"
+  lambda_IC_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/IC_chr4_trunc3_100kb_tkl_from_all_chrom_iter14eps/iter_099/params/lambda_IC.npy"
+  resolution: "500kb"
+  kernel_flags:
+    mu:   4.22
+    rc:   1.82
+    rcut: 3.0
+    beta: 1.0
+
+exp_targets:
+  T_type_kl_npy: "/projects/p32733/ME/experimental_data/chr_4_500mb_Tkl_exp_interpolated.npy"
+  phi_exp_IC_npy: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+
+resources:
+  simulation:
+    array_len: 8               # 8 x 7 = 56 ≥ 50 reps
+    per_task_replicates: 7
+    time_limit: "4:00:00"
+    cpus_per_task: 1
+    mem: "5G"
+    partition: "gengpu"
+    gres: "gpu:a100:1"
+
+  processing:
+    workers:
+      array_len: 8
+      time_limit: "4:00:00"
+      cpus_per_task: 7
+      mem: "25G"
+      io_k: 2
+    reduce:
+      time_limit: "0:30:00"
+      cpus_per_task: 1
+      mem: "4G"
+      epsilon_dir: null
+      lambda_dir: null

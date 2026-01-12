@@ -54,6 +54,7 @@ def main():
     array_len = int(sim_res["array_len"])
     # Safety: array_len * per_task should cover n_replicates; extra slots are clipped in the template
     sim_script_tpl = (tpl_dir / "sbatch_sim_array.sh")
+    force_kwargs_json = json.dumps(cfg.get("force_kwargs", {}))
     sim_script_text = sim_script_tpl.read_text().format(
         job_name=f"{args.name}_sim_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -89,6 +90,7 @@ def main():
         lambda_IC_path=str(lambda_IC_path) if lambda_IC_path else "",
         d_init=d_init if d_init is not None else "",
         d_end=d_end if d_end is not None else "",
+        force_kwargs=force_kwargs_json,
     )
     sim_sbatch = iterd / "sims" / "submit_sim_array.sh"
     sim_sbatch.write_text(sim_script_text); make_executable(sim_sbatch)

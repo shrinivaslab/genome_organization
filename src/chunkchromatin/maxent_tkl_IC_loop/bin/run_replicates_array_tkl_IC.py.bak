@@ -39,6 +39,8 @@ if not epsilon_path:
     raise ValueError("MAXENT_EPSILON_PATH environment variable not set")
 
 lambda_IC_path = os.environ.get("MAXENT_LAMBDA_IC_PATH")
+if not lambda_IC_path:
+    raise ValueError("MAXENT_LAMBDA_IC_PATH environment variable not set")
 
 # IC parameters
 d_init = int(os.environ.get("MAXENT_D_INIT", "3"))
@@ -52,7 +54,7 @@ chains = [(start, end, is_ring) for start, end, is_ring in json.loads(chains_jso
 initialization_method = os.environ.get("MAXENT_INITIALIZATION_METHOD", "random_walk")
 monomer_types = np.load(monomer_types_path)
 interaction_matrix = np.load(epsilon_path)  # Use epsilon for type-type interactions
-# lambda_IC will be loaded conditionally after force_kwargs is parsed
+lambda_IC = np.load(lambda_IC_path)  # Load lambda_IC for ideal chromosome force
 
 # Default force kwargs overrides
 DEFAULT_FORCE_KWARGS_OVERRIDES = {
@@ -92,27 +94,7 @@ if force_kwargs_json:
     force_kwargs_overrides = json.loads(force_kwargs_json)
 else:
     force_kwargs_overrides = DEFAULT_FORCE_KWARGS_OVERRIDES
-
-# Build forces_list based on force_kwargs
-# Check if ideal_chromosome_gamma_force is specified instead of ideal_chromosome_force
-has_gamma_force = 'ideal_chromosome_gamma_force' in force_kwargs_overrides
-has_loops = 'loops' in force_kwargs_overrides
-base_forces = ['harmonic_bonds','angle_force','spherical_confinement','tanh_type_force','polynomial_repulsive']
-if has_gamma_force:
-    forces_list = base_forces + ['ideal_chromosome_gamma_force']
-else:
-    forces_list = base_forces + ['ideal_chromosome_force']
-if has_loops:
-    forces_list.append('loops')
-
-# Conditionally load lambda_IC only if ideal_chromosome_force is used
-if not has_gamma_force:
-    if not lambda_IC_path:
-        raise ValueError("MAXENT_LAMBDA_IC_PATH environment variable must be set when using ideal_chromosome_force")
-    lambda_IC = np.load(lambda_IC_path)
-else:
-    lambda_IC = None  # Not needed for gamma force
-
+forces_list = ['harmonic_bonds','angle_force','spherical_confinement','tanh_type_force','polynomial_repulsive','ideal_chromosome_force']
 box_length = (N/density) ** (1/3.)
 
 out_dir = os.path.join(output_base, rep_name)
@@ -133,7 +115,7 @@ metadata = {
     "chains": chains,
     "force_list": forces_list,
     "interaction_matrix": interaction_matrix.tolist(),
-    "lambda_IC": lambda_IC.tolist() if lambda_IC is not None else None,
+    "lambda_IC": lambda_IC.tolist(),
     "d_init": d_init,
     "d_end": d_end,
     "monomer_types_path": monomer_types_path,
@@ -220,23 +202,6 @@ with BinaryReporter(filename=traj_path, n_particles=N, mode='w', metadata=metada
                 lambda_IC,
                 d_init=d_init,
                 d_end=d_end,
-                **kwargs
-            )
-        elif force_name == "ideal_chromosome_gamma_force":
-            # Add ideal chromosome gamma force (alternative to IC)
-            force = chromosome.add_ideal_chromosome_gamma_force(
-                sim,
-                **kwargs
-            )
-        elif force_name == "loops":
-            # Add loops force
-            # Extract looplists from kwargs (required for loops)
-            looplists = kwargs.pop("looplists", None)
-            if looplists is None:
-                raise ValueError("looplists must be specified in force_kwargs for loops force")
-            force = chromosome.add_loops(
-                sim,
-                looplists,
                 **kwargs
             )
         else:

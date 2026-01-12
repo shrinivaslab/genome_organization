@@ -1,0 +1,145 @@
+# MaxEnt combined TKL and IC loop configuration (relative step cap)
+# This variant removes the hard absolute step clamp and uses a relative cap policy
+# (target RMS step as a fraction of current parameter magnitude). The code does
+# not yet enforce the relative cap directly; keep max_lambda_step_size null to
+# avoid the old absolute clamp and use the lower Adam LRs plus L2 normalization
+# to keep steps stable.
+
+# SLURM settings (global defaults; can be overridden per-stage in `resources`)
+slurm:
+  account: "p32733"
+  partition: "short"          # default partition for processing/update jobs
+  time_limit: "4:00:00"
+  cpus_per_task: 7
+  mem: "25G"
+  constraint: null
+  qos: null
+
+# Simulation settings (model + loop constants)
+simulation:
+  n_replicates: 80          # logical number of replicates per iteration
+  frames: 4000              # frames per replicate
+  burnin_frames: 400        # cold-start frames to discard in analysis
+  save_frames: true         # if your runner supports streaming, set false to minimize I/O
+  seeds_base: 177013        # derive 50 fixed seeds from this base
+  n_types: 5                # number of chromatin types (K)
+  N: 1570                   # total number of monomers in the system
+  density: 0.33             # density for box length calculation
+  chains:                   # chain definitions [(start, end, is_ring), ...]
+    - [0, 1570, false]      # chromosome 4
+  initialization_method: "random_walk"  # "random_walk" or "grow_cubic" or "territory_rw"
+
+# Ideal Chromosome (IC) specific settings
+ideal_chromosome:
+  d_init: 3          # minimum genomic distance (bins)
+  d_end: 300         # maximum genomic distance (bins)
+  # dmax = d_end - d_init = 297
+
+# Force parameters (optional, uses defaults if not specified)
+# Customize force parameters here; omit any force to use defaults from run_replicates_array.py
+force_kwargs:
+  harmonic_bonds:
+    bondWiggleDistance: 0.10  # (σ units)
+    bondLength: 1.0
+  angle_force:
+    k: 2.0                    # in kT/rad^2
+    theta_0: 3.141592653589793  # np.pi
+  spherical_confinement:
+    r: "density"
+    density: 0.10
+    k: 1.5                    # softer than 5.0
+    center: [0.0, 0.0, 0.0]
+    invert: false
+    particles: null
+    name: "spherical_confinement"
+  polynomial_repulsive:
+    trunc: 3                  # energy cap at r→0 in kT
+    radiusMult: 1
+    name: "polynomial_repulsive"
+
+# Learning-rate & update
+update:
+  method: "adam"  # "newton" or "adam"
+  # Absolute clamp disabled to allow relative cap logic (handled in code)
+  max_lambda_step_size: null  # set null to remove hard absolute clamp
+  gradient_normalization: "L2"  # Normalize joint gradients to control scale
+  # Relative step size policy (to be enforced in code): target RMS step fraction
+  relative_step:
+    target_rms_frac: 0.01      # aim for rms(Δ) ≈ 1% of rms(params)
+    max_frac: 0.03             # safety: cap any single param step to 3% of |param|
+  # Adaptive step size reduction (fine-tuning)
+  adaptive_step_size:
+    relative_error_scaling: true
+    reference_threshold: 50.0
+    min_scale_factor: 0.001
+    max_scale_factor: 1.0      # no up-scaling
+    scaling_function: "sqrt"
+    reduce_when_relative_error_below: 100.0
+    reduction_factor: 0.7
+    reduce_when_loss_plateau: true
+    plateau_patience: 1
+    exponential_decay: true
+    decay_rate: 0.95
+    decay_relative_error_threshold: 150.0
+    min_step_size: 0.000001
+  # Adam-specific hyperparameters (tuned down to reduce clipping)
+  adam:
+    learning_rate: 0.005       # TKL LR
+    learning_rate_ic: 0.003    # IC LR (smaller to reduce overshoot)
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1e-8
+
+# Convergence (stop if true for N consecutive iterations)
+# Note: Both epsilon and lambda_IC must converge for the loop to stop
+convergence:
+  max_abs_residual: 1.0e-3
+  l2_residual: 5.0e-3
+  max_param_step: 1.0e-4
+  consecutive: 2
+
+# Inputs processing script expects:
+processing_inputs:
+  monomer_types: "/home/pkv4601/genome_architecture/chunkchromatin/Megaenhancers/sim_params/ME_bed_types_chr4.npy"
+  exp_tkl: "/projects/p32733/ME/experimental_data/chr_4_500mb_Tkl_exp_interpolated.npy"
+  exp_phi_IC: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+  epsilon_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/tkl_IC_opt_L2_chr4_2/iter_010/params/epsilon.npy"
+  lambda_IC_init: "/projects/p32733/ME/maxent/retraining_different_priors/maxent_retraining/IC_term/tkl_IC_opt_L2_chr4_2/iter_010/params/lambda_IC.npy"
+  resolution: "500kb"
+  kernel_flags:
+    mu:   4.22
+    rc:   1.82
+    rcut: 3.0
+    beta: 1.0
+
+# Experimental target files (copied to run_root/exp_targets/ during initialization)
+exp_targets:
+  T_type_kl_npy: "/projects/p32733/ME/experimental_data/chr_4_500mb_Tkl_exp_interpolated.npy"
+  phi_exp_IC_npy: "/projects/p32733/ME/experimental_data/IC_exp_chr4.npy"
+
+# ------------------------------
+# stage-specific resources
+# ------------------------------
+resources:
+  simulation:
+    array_len: 8
+    per_task_replicates: 10
+    time_limit: "4:00:00"
+    cpus_per_task: 1
+    mem: "5G"
+    partition: "gengpu"
+    gres: "gpu:a100:1"
+
+  processing:
+    workers:
+      array_len: 8
+      time_limit: "4:00:00"
+      cpus_per_task: 7
+      mem: "25G"
+      io_k: 2
+    reduce:
+      time_limit: "0:30:00"
+      cpus_per_task: 1
+      mem: "4G"
+      epsilon_dir: null
+      lambda_dir: null

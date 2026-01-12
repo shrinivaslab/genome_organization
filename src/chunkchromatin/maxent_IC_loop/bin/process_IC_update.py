@@ -86,7 +86,33 @@ class PhiICOnlineCov:
         hess = (beta**2) * cov
         return self.mean.copy(), cov, hess
 
-def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None, cutoff=0.0):
+def _normalize_chains(chains, n_particles):
+    if not chains:
+        return [(0, n_particles, False)]
+    norm = []
+    for entry in chains:
+        if len(entry) == 2:
+            start, end = entry
+            is_ring = False
+        else:
+            start, end, is_ring = entry
+        end = n_particles if end is None else end
+        norm.append((int(start), int(end), bool(is_ring)))
+    return norm
+
+def _ic_denominator(chains, d_init, d_end):
+    dmax = d_end - d_init
+    denom = np.zeros(dmax, dtype=float)
+    for start, end, _ in chains:
+        chain_len = end - start
+        if chain_len <= d_init:
+            continue
+        max_d = min(d_end, chain_len)
+        ds = np.arange(d_init, max_d, dtype=int)
+        denom[ds - d_init] += (chain_len - ds)
+    return denom
+
+def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=None, cutoff=0.0, chains=None):
     """
     Compute phi_IC[d] from positions for all frames (OPTIMIZED VERSION).
     
@@ -124,10 +150,15 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
         rcut = rc + 4.0 / mu
     
     phi_frames = np.zeros((F, dmax), dtype=float)
-    
-    # Pre-allocate arrays for vectorized diagonal extraction
-    # For each genomic distance d, we need to track which pairs (i,j) have |j-i| = d
-    d_values = np.arange(d_init, d_end)
+
+    norm_chains = _normalize_chains(chains, N)
+    denom = _ic_denominator(norm_chains, d_init, d_end)
+    if np.all(denom == 0):
+        return phi_frames
+
+    chain_id = np.full(N, -1, dtype=int)
+    for cid, (start, end, _) in enumerate(norm_chains):
+        chain_id[start:end] = cid
     
     for f in range(F):
         X = positions[f]
@@ -142,6 +173,12 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
         
         i = pairs[:, 0]
         j = pairs[:, 1]
+
+        same_chain = (chain_id[i] == chain_id[j]) & (chain_id[i] >= 0)
+        if not np.any(same_chain):
+            continue
+        i = i[same_chain]
+        j = j[same_chain]
         
         # Compute distances and contact probabilities only for nearby pairs
         rij = np.linalg.norm(X[i] - X[j], axis=1)
@@ -169,19 +206,18 @@ def _compute_phi_IC_from_positions(positions, d_init, d_end, mu=MU_DEFAULT, rc=R
             genomic_dists_valid = genomic_dists[valid_mask]
             fij_valid = fij[valid_mask]
             
-            # Use bincount to sum fij for each genomic distance, then divide by counts
-            # Shift indices so d_init maps to 0
+            # Use bincount to sum fij for each genomic distance.
+            # Shift indices so d_init maps to 0.
             dist_indices = genomic_dists_valid - d_init
             sums = np.bincount(dist_indices, weights=fij_valid, minlength=dmax)
-            counts = np.bincount(dist_indices, minlength=dmax)
             
-            # Compute means (avoid division by zero)
+            # Compute means over all intra-chain pairs (pairs beyond rcut contribute 0)
             with np.errstate(divide='ignore', invalid='ignore'):
-                phi_frames[f, :] = np.where(counts > 0, sums / counts, 0.0)
+                phi_frames[f, :] = np.where(denom > 0, sums / denom, 0.0)
     
     return phi_frames
 
-def process_one_replicate_IC(positions, exp_phi_IC_path, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=RCUT_DEFAULT, beta=BETA_DEFAULT, cutoff=0.0):
+def process_one_replicate_IC(positions, exp_phi_IC_path, d_init, d_end, mu=MU_DEFAULT, rc=RC_DEFAULT, rcut=RCUT_DEFAULT, beta=BETA_DEFAULT, cutoff=0.0, chains=None):
     """
     Process one replicate to compute phi_sim, grad, and Hess for IC optimization.
     
@@ -197,7 +233,7 @@ def process_one_replicate_IC(positions, exp_phi_IC_path, d_init, d_end, mu=MU_DE
     
     # Compute phi[d] for each frame
     phi_frames = _compute_phi_IC_from_positions(
-        positions, d_init, d_end, mu=mu, rc=rc, rcut=rcut, cutoff=cutoff
+        positions, d_init, d_end, mu=mu, rc=rc, rcut=rcut, cutoff=cutoff, chains=chains
     )
     
     # Accumulate mean and covariance
@@ -261,7 +297,7 @@ def _rep_dir_and_path(replicate_root, rep_idx):
     traj_path = os.path.join(rep_dir, "trajectory.traj")
     return rep_str, traj_path
 
-def _process_replicate_entry_IC(rep_idx, replicate_root, output_dir, exp_phi_IC_path, d_init, d_end, mu, rc, rcut, beta, cutoff, manifest_path):
+def _process_replicate_entry_IC(rep_idx, replicate_root, output_dir, exp_phi_IC_path, d_init, d_end, mu, rc, rcut, beta, cutoff, manifest_path, chains=None):
     rep_str, traj_path = _rep_dir_and_path(replicate_root, rep_idx)
     out_npz   = os.path.join(output_dir, f"{rep_str}_IC_grad_hess.npz")
     out_touch = os.path.join(output_dir, f"{rep_str}.READY")
@@ -300,7 +336,8 @@ def _process_replicate_entry_IC(rep_idx, replicate_root, output_dir, exp_phi_IC_
             exp_phi_IC_path=exp_phi_IC_path,
             d_init=d_init,
             d_end=d_end,
-            mu=mu, rc=rc, rcut=rcut, beta=beta, cutoff=cutoff
+            mu=mu, rc=rc, rcut=rcut, beta=beta, cutoff=cutoff,
+            chains=chains
         )
         compute_s = time.time() - t_comp0
 
@@ -580,6 +617,8 @@ def parse_args():
     pw.add_argument("--rcut", type=float, default=RCUT_DEFAULT)
     pw.add_argument("--beta", type=float, default=BETA_DEFAULT)
     pw.add_argument("--cutoff", type=float, default=0.0)
+    pw.add_argument("--chains", type=str, default=None,
+                    help="JSON list of (start, end, is_ring) chain tuples (end is exclusive)")
 
     # reduce mode
     pr = sub.add_parser("reduce", help="Aggregate all per-rep artifacts and write lambda_IC_tk_{n+1}.npy")
@@ -643,6 +682,7 @@ def main():
         os.environ["MKL_NUM_THREADS"] = "1"
         os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+        chains = json.loads(args.chains) if args.chains else None
         ctx = mp.get_context("fork")
         global _IO_SEMA, _K_IO
         _IO_SEMA = ctx.Semaphore(args.io_k)
@@ -661,6 +701,7 @@ def main():
                     d_end=args.d_end,
                     mu=args.mu, rc=args.rc, rcut=args.rcut, beta=args.beta, cutoff=args.cutoff,
                     manifest_path=manifest_path,
+                    chains=chains,
                 ),
                 targets,
                 chunksize=1,
@@ -672,4 +713,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

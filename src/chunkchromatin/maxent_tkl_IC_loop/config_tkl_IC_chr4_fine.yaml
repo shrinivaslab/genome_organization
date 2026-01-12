@@ -68,7 +68,7 @@ update:
   # eta_max: 5.0e-1
   # precond_eps: 1.0e-8
   # bb_clip_fraction: 0.25
-  max_lambda_step_size: 0.1  # Maximum allowed step size per parameter (applies to both epsilon and lambda_IC)
+  max_lambda_step_size: 0.02  # Tighter absolute clamp to avoid saturated updates; consider pairing with relative caps in code
   gradient_normalization: "L2"  # Normalization method for joint gradients: "L2" (L2 norm) or null/not specified for no normalization
   # Adaptive step size reduction (gradually decreases step size for fine-tuning)
   adaptive_step_size:
@@ -76,26 +76,26 @@ update:
     # Larger relative errors → larger step sizes (more correction needed)
     # Smaller relative errors → smaller step sizes (fine-tuning, prevent overshooting)
     relative_error_scaling: true  # Enable relative-error-based step size scaling
-    reference_threshold: 100.0    # Reference relative error (100%) for scaling
+    reference_threshold: 50.0    # Start shrinking sooner as errors fall
     min_scale_factor: 0.001         # Minimum step size multiplier (prevents too-small steps)
-    max_scale_factor: 1.5         # Maximum step size multiplier (prevents too-large steps)
+    max_scale_factor: 1.0         # Do not up-scale steps beyond base LR
     scaling_function: "sqrt"       # "linear", "sqrt", or "ratio" - sqrt is recommended for stability
     # Reduce when relative error < threshold (best for fine-tuning near convergence)
     reduce_when_relative_error_below: 100.0  # Reduce when relative_error_pct < 100%
-    reduction_factor: 0.85  # Multiply step size by this when reducing (0.85 = 15% reduction)
+    reduction_factor: 0.7  # Multiply step size by this when reducing (0.7 = 30% reduction)
     # Reduce if losses plateau (no improvement for N iterations)
     reduce_when_loss_plateau: true
-    plateau_patience: 2  # Number of iterations without improvement before reducing
+    plateau_patience: 1  # Faster response to plateaus
     # Exponential decay as safety net (only when BOTH relative errors < threshold)
     exponential_decay: true
-    decay_rate: 0.98  # Multiply by this each iteration (0.98 = 2% reduction per iter)
+    decay_rate: 0.95  # Multiply by this each iteration (0.95 = 5% reduction per iter)
     decay_relative_error_threshold: 150.0  # Only apply decay when BOTH epsilon and IC relative_error < this
     # Minimum step size (won't go below this)
     min_step_size: 0.000001
   # Adam-specific hyperparameters (only used when method="adam")
   adam:
-    learning_rate: 0.025  # Initial learning rate for TKL (epsilon). Increased from 0.001 for faster convergence without L2 normalization
-    learning_rate_ic: 0.025  # Learning rate for IC (lambda_IC). Higher than TKL to compensate for smaller IC gradients
+    learning_rate: 0.005  # Initial learning rate for TKL (epsilon); lowered to reduce clipping
+    learning_rate_ic: 0.003  # Learning rate for IC (lambda_IC); smaller to avoid overshoot with clamp
     beta1: 0.9  # Exponential decay rate for first moment estimates
     beta2: 0.999  # Exponential decay rate for second moment estimates
     epsilon: 1e-8  # Small constant for numerical stability
@@ -173,4 +173,3 @@ resources:
       # Optional: custom directories for parameter outputs (defaults to {iter_dir}/update)
       epsilon_dir: null
       lambda_dir: null
-

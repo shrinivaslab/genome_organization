@@ -30,6 +30,5 @@ python "{process_tkl_IC_update}" reduce \
   --epsilon-dir "${{epsilon_dir}}" \
   --lambda-dir  "${{lambda_dir}}" \
   --iteration   "{iteration}" \
-  --max-lambda-step-size "{max_lambda_step_size}"{gradient_normalization_flag}{method_flag}{adam_lr_flag}{adam_lr_ic_flag}{adam_beta1_flag}{adam_beta2_flag}{adam_epsilon_flag}
+  {max_lambda_step_size_flag}{gradient_normalization_flag}{method_flag}{adam_lr_flag}{adam_lr_ic_flag}{adam_beta1_flag}{adam_beta2_flag}{adam_epsilon_flag}{relstep_target_flag}{relstep_max_flag}
 echo "[proc:reduce] $(date) done"
-

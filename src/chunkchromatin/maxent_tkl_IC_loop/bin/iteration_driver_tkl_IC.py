@@ -36,6 +36,7 @@ def main():
 
     # Get max_lambda_step_size from config (default 0.5)
     max_lambda_step_size = cfg.get("update", {}).get("max_lambda_step_size", 0.5)
+    max_lambda_step_size_flag = f" --max-lambda-step-size {max_lambda_step_size}" if max_lambda_step_size is not None else ""
     
     # Get gradient_normalization from config (default None for no normalization)
     gradient_normalization = cfg.get("update", {}).get("gradient_normalization", None)
@@ -53,6 +54,13 @@ def main():
     
     # Get adaptive step size config
     adaptive_step_size_config = cfg.get("update", {}).get("adaptive_step_size", None)
+
+    # Relative step cap config
+    relstep_cfg = cfg.get("update", {}).get("relative_step", {})
+    relstep_target = relstep_cfg.get("target_rms_frac", None)
+    relstep_max = relstep_cfg.get("max_frac", None)
+    relstep_target_flag = f" --relstep-target-frac {relstep_target}" if relstep_target is not None else ""
+    relstep_max_flag = f" --relstep-max-frac {relstep_max}" if relstep_max is not None else ""
     
     # Write adaptive config to JSON file for reduce step to read
     if adaptive_step_size_config is not None:
@@ -66,6 +74,7 @@ def main():
     per_task = int(sim_res.get("per_task_replicates", 1))
     array_len = int(sim_res["array_len"])
     sim_script_tpl = (tpl_dir / "sbatch_sim_array_tkl_IC.sh")
+    force_kwargs_json = json.dumps(cfg.get("force_kwargs", {}))
     sim_script_text = sim_script_tpl.read_text().format(
         job_name=f"{args.name}_sim_{args.iter:03d}",
         account=cfg["slurm"]["account"],
@@ -97,6 +106,7 @@ def main():
         per_task_reps=per_task,
         d_init=d_init,
         d_end=d_end,
+        force_kwargs=force_kwargs_json,
     )
     sim_sbatch = iterd / "sims" / "submit_sim_array.sh"
     sim_sbatch.write_text(sim_script_text); make_executable(sim_sbatch)
@@ -141,6 +151,7 @@ def main():
         kernel_cli=kernel_cli.strip(),
         d_init=d_init,
         d_end=d_end,
+        chains=json.dumps(cfg["simulation"]["chains"]),
         resolution=inputs.get("resolution", ""),
     )
     procw_sbatch = iterd / "obs" / "submit_process_worker.sh"
@@ -171,7 +182,7 @@ def main():
         lambda_dir=lambda_dir,
         process_tkl_IC_update=str((bin_dir / "process_tkl_IC_update.py").resolve()),
         iteration=args.iter,
-        max_lambda_step_size=max_lambda_step_size,
+        max_lambda_step_size_flag=max_lambda_step_size_flag,
         gradient_normalization=gradient_normalization if gradient_normalization else "",
         gradient_normalization_flag=f" --gradient-normalization {gradient_normalization}" if gradient_normalization else "",
         method=method,
@@ -186,6 +197,8 @@ def main():
         adam_beta2_flag=f" --adam-beta2 {adam_beta2}" if adam_beta2 is not None else "",
         adam_epsilon=adam_epsilon if adam_epsilon is not None else "",
         adam_epsilon_flag=f" --adam-epsilon {adam_epsilon}" if adam_epsilon is not None else "",
+        relstep_target_flag=relstep_target_flag,
+        relstep_max_flag=relstep_max_flag,
     )
     procr_sbatch = iterd / "obs" / "submit_process_reduce.sh"
     procr_sbatch.write_text(procr_text); make_executable(procr_sbatch)
@@ -219,4 +232,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

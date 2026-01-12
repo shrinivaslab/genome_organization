@@ -36,12 +36,16 @@ src/chunkchromatin/maxent_loop/bin/utils.py
 src/chunkchromatin/maxent_loop/bin/watchdog.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/__init__.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/iteration_driver_tkl_IC.py
+src/chunkchromatin/maxent_tkl_IC_loop/bin/iteration_driver_tkl_IC_standalone.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/maxent_tkl_IC_loop.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/process_tkl_IC_update.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/run_replicates_array_tkl_IC.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/series_runner.py
+src/chunkchromatin/maxent_tkl_IC_loop/bin/standalone_sim_batch.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/update_step_tkl_IC.py
+src/chunkchromatin/maxent_tkl_IC_loop/bin/update_step_tkl_IC_standalone.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/utils.py
+src/chunkchromatin/validation/compare_contact_maps.py
 src/genome_organization.egg-info/PKG-INFO
 src/genome_organization.egg-info/SOURCES.txt
 src/genome_organization.egg-info/dependency_links.txt
