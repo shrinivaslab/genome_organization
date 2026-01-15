@@ -2,7 +2,7 @@
 
 A comprehensive framework for simulating and analyzing 3D genome organization using coarse-grained molecular dynamics. This repository provides tools for chromatin simulation, contact map analysis, and Hi-C data processing.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
