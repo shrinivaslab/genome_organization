@@ -29,7 +29,8 @@ MU_DEFAULT   = 4.22
 RC_DEFAULT   = 1.82
 RCUT_DEFAULT = 3.0  
 BETA_DEFAULT = 1.0
-GAMMA        = 0.33    # damping factor for Newton step
+DAMP_TKL    = 3e-7   # OpenMiChroM damp for type update
+DAMP_IC     = 5e-4   # OpenMiChroM damp for IC update
 LAMBDA_REG_SCALE = 1e-10
 
 # Adam optimizer constants
@@ -144,17 +145,39 @@ def _compute_monomer_contact_matrix(positions, mu=MU_DEFAULT, rc=RC_DEFAULT, rcu
     
     return contact_matrices
 
+def _row_neighbor_normalize(matrix):
+    """
+    Normalize each row by the first off-diagonal (neighbor) contact.
+    Ensures diagonal entries are 1 after normalization.
+    """
+    N = matrix.shape[0]
+    if N < 2:
+        out = matrix.copy()
+        if N == 1:
+            out[0, 0] = 1.0
+        return out
+    norms = np.empty((N,), dtype=float)
+    for i in range(N):
+        if i + 1 < N:
+            norms[i] = matrix[i, i + 1]
+        else:
+            norms[i] = matrix[i, i - 1]
+    norms = np.where(norms > 0, norms, 1.0)
+    out = matrix / norms[:, None]
+    np.fill_diagonal(out, 1.0)
+    return out
+
 def _block_sum_and_normalize(matrix, block_size=5):
     """
     Block-sum matrix with blocks of size block_size × block_size,
-    then normalize each row by its maximum value.
+    then normalize each row by its first off-diagonal value.
     
     Args:
         matrix: (N, N) array at 100kb resolution
         block_size: number of bins to sum (default 5 for 100kb -> 500kb)
     
     Returns:
-        (N//block_size, N//block_size) array normalized by row maxima
+        (N//block_size, N//block_size) array normalized by first-neighbor contacts
     """
     N = matrix.shape[0]
     N_new = N // block_size
@@ -166,10 +189,8 @@ def _block_sum_and_normalize(matrix, block_size=5):
     # Reshape and sum over blocks: (N_new, block_size, N_new, block_size) -> (N_new, N_new)
     matrix_blocked = matrix_trunc.reshape(N_new, block_size, N_new, block_size).sum(axis=(1, 3))
     
-    # Normalize each row by its maximum
-    row_maxes = matrix_blocked.max(axis=1, keepdims=True)
-    row_maxes = np.where(row_maxes > 0, row_maxes, 1.0)  # Avoid division by zero
-    matrix_normalized = matrix_blocked / row_maxes
+    # Normalize each row by its first off-diagonal neighbor contact
+    matrix_normalized = _row_neighbor_normalize(matrix_blocked)
     
     return matrix_normalized
 
@@ -326,10 +347,8 @@ def _covariance_pass_upper_500kb(
         diag_idx = np.diag_indices(N_500)
         B[diag_idx] += f0
 
-        # Row-normalize so each row's max is 1 (if any contacts exist)
-        row_max = B.max(axis=1, keepdims=True)
-        row_max = np.where(row_max > 0.0, row_max, 1.0)
-        B_norm = B / row_max
+        # Row-normalize by first off-diagonal neighbor contact
+        B_norm = _row_neighbor_normalize(B)
 
         # Aggregate 500kb contact probabilities into KxK type-type observables
         T_frame = np.zeros((K, K), dtype=np.float64)
@@ -1137,23 +1156,19 @@ def _apply_newton_update(g_mean, B_mean, max_step_size=None):
         print("[WARNING] Cholesky failed, falling back to standard solve")
         delta_vec = -np.linalg.solve(B_reg, g_mean)
     
-    # Parameter-dependent scaling
-    max_change_per_param = max_step_size if max_step_size is not None else 0.5
-    max_proposed_change = np.max(np.abs(delta_vec))
-    if max_proposed_change > 0:
-        adaptive_gamma = min(max_change_per_param / max_proposed_change, GAMMA)
-    else:
-        adaptive_gamma = GAMMA
-    
+    # OpenMiChroM-style update: no gamma/cap in joint Newton direction.
+    adaptive_gamma = 1.0
     delta_vec *= adaptive_gamma
-    
+
+    max_proposed_change = float(np.max(np.abs(delta_vec))) if delta_vec.size else 0.0
+
     kappa_after = (lam_max + lambda_reg) / (abs(lam_min) + lambda_reg)
-    
+
     meta = {
-        "gamma_base": GAMMA,
-        "gamma_adaptive": float(adaptive_gamma),
+        "damp": float(DAMP_TKL),
+        "gamma": float(adaptive_gamma),
         "max_proposed_change": float(max_proposed_change),
-        "max_change_per_param": float(max_change_per_param),
+        "max_change_per_param": None,
         "lambda_reg": float(lambda_reg),
         "kappa_raw": float(kappa_raw),
         "kappa_target": float(kappa_target),
@@ -1310,7 +1325,8 @@ def _process_replicate_entry_tkl_IC(
     beta, 
     manifest_path, 
     resolution=None,
-    chains=None
+    chains=None,
+    skip_frames=0
 ):
     """
     Process one replicate to compute both TKL and IC observables from the same trajectory.
@@ -1348,6 +1364,8 @@ def _process_replicate_entry_tkl_IC(
         finally:
             if _IO_SEMA is not None: _IO_SEMA.release()
         read_s = time.time() - t_read0
+        if skip_frames:
+            positions = positions[skip_frames:]
 
         # Process both observables
         t_comp0 = time.time()
@@ -1943,9 +1961,9 @@ def reduce_and_update_both(
             # Use already normalized gradients and Hessian
             g_joint = np.concatenate([g_mean_tkl_normalized, g_mean_ic_normalized])
             # Don't apply step size constraint in normalized space - we'll do it in parameter space after denormalization
-            # Pass a very large value so _apply_newton_update applies only base GAMMA scaling (no additional constraint)
+            # Pass a very large value so _apply_newton_update applies only base DAMP_TKL scaling (no additional constraint)
             # Then we'll undo that, denormalize, and apply the real constraint in parameter space
-            max_step_size_normalized = 1e10  # Very large value so adaptive_gamma = GAMMA (no extra constraint)
+            max_step_size_normalized = 1e10  # Very large value so adaptive_gamma = DAMP_TKL (no extra constraint)
         else:
             g_joint = np.concatenate([g_mean_tkl, g_mean_ic])
             max_step_size_normalized = max_lambda_step_size
@@ -1960,11 +1978,11 @@ def reduce_and_update_both(
         # Denormalize updates if normalization was applied
         if norm_factors_tkl is not None and norm_factors_ic is not None:
             # The delta from _apply_newton_update has adaptive_gamma applied in normalized space
-            # Since we passed a very large max_step_size, adaptive_gamma = GAMMA (no extra constraint)
-            # Undo that GAMMA scaling, denormalize, then apply constraint in parameter space
+            # Since we passed a very large max_step_size, adaptive_gamma = DAMP_TKL (no extra constraint)
+            # Undo that DAMP_TKL scaling, denormalize, then apply constraint in parameter space
             
-            # Undo the GAMMA that was applied in normalized space
-            gamma_applied = meta_joint.get('gamma_adaptive', GAMMA)
+            # Undo the DAMP_TKL that was applied in normalized space
+            gamma_applied = meta_joint.get('damp', DAMP_TKL)
             if gamma_applied > 1e-10:
                 delta_vec_tkl_raw = delta_vec_tkl_raw / gamma_applied
                 delta_vec_ic_raw = delta_vec_ic_raw / gamma_applied
@@ -1988,20 +2006,20 @@ def reduce_and_update_both(
             max_proposed_change_ic = np.max(np.abs(delta_vec_ic))
             
             if max_proposed_change_tkl > 0:
-                adaptive_gamma_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, GAMMA) if max_change_per_param_tkl is not None else GAMMA
+                damp_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, DAMP_TKL) if max_change_per_param_tkl is not None else DAMP_TKL
             else:
-                adaptive_gamma_tkl = GAMMA
+                damp_tkl = DAMP_TKL
             
             if max_proposed_change_ic > 0:
-                adaptive_gamma_ic = min(max_change_per_param_ic / max_proposed_change_ic, GAMMA) if max_change_per_param_ic is not None else GAMMA
+                damp_ic = min(max_change_per_param_ic / max_proposed_change_ic, DAMP_TKL) if max_change_per_param_ic is not None else DAMP_TKL
             else:
-                adaptive_gamma_ic = GAMMA
+                damp_ic = DAMP_IC
             
             # Apply adaptive_gamma to the denormalized updates in parameter space
-            delta_vec_tkl *= adaptive_gamma_tkl
-            delta_vec_ic *= adaptive_gamma_ic
+            delta_vec_tkl *= DAMP_TKL
+            delta_vec_ic *= DAMP_IC
             
-            print(f"[NORMALIZATION] Applied adaptive_gamma in parameter space: TKL={adaptive_gamma_tkl:.3f}, IC={adaptive_gamma_ic:.3f}")
+            print(f"[NORMALIZATION] Applied adaptive_gamma in parameter space: TKL={damp_tkl:.3f}, IC={damp_ic:.3f}")
             print(f"[NORMALIZATION] Final max_proposed_change: TKL={np.max(np.abs(delta_vec_tkl)):.6f}, IC={np.max(np.abs(delta_vec_ic)):.6f}")
         else:
             # No normalization: adaptive_gamma already applied in _apply_newton_update
@@ -2018,21 +2036,21 @@ def reduce_and_update_both(
             max_change_per_param_tkl = max_lambda_step_size_tkl
             max_change_per_param_ic = max_lambda_step_size_ic
             
-            adaptive_gamma_base = meta_joint.get('gamma_adaptive', GAMMA)
+            adaptive_damp = meta_joint.get('damp', DAMP_TKL)
             
             if max_change_per_param_tkl is not None and max_proposed_change_tkl > max_change_per_param_tkl:
-                adaptive_gamma_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, GAMMA)
-                delta_vec_tkl *= adaptive_gamma_tkl / adaptive_gamma_base
+                damp_tkl = min(max_change_per_param_tkl / max_proposed_change_tkl, DAMP_TKL)
+                delta_vec_tkl *= DAMP_TKL / adaptive_damp
                 print(f"[NEWTON] Re-applied step size constraint to TKL: {max_proposed_change_tkl:.6f} -> {np.max(np.abs(delta_vec_tkl)):.6f} (max_step={max_change_per_param_tkl:.6f})")
             else:
-                adaptive_gamma_tkl = adaptive_gamma_base
+                damp_tkl = adaptive_damp
             
             if max_change_per_param_ic is not None and max_proposed_change_ic > max_change_per_param_ic:
-                adaptive_gamma_ic = min(max_change_per_param_ic / max_proposed_change_ic, GAMMA)
-                delta_vec_ic *= adaptive_gamma_ic / adaptive_gamma_base
+                damp_ic = min(max_change_per_param_ic / max_proposed_change_ic, DAMP_TKL)
+                delta_vec_ic *= DAMP_IC / adaptive_damp
                 print(f"[NEWTON] Re-applied step size constraint to IC: {max_proposed_change_ic:.6f} -> {np.max(np.abs(delta_vec_ic)):.6f} (max_step={max_change_per_param_ic:.6f})")
             else:
-                adaptive_gamma_ic = adaptive_gamma_base
+                damp_ic = adaptive_damp
         
         # Extract metadata for separate logging
         meta_tkl = meta_joint.copy()
@@ -2041,21 +2059,21 @@ def reduce_and_update_both(
         # Update with correct values after denormalization/recomputation
         if norm_factors_tkl is not None:
             meta_tkl['max_proposed_change'] = float(np.max(np.abs(delta_vec_tkl)))
-            meta_tkl['gamma_adaptive'] = float(adaptive_gamma_tkl)
+            meta_tkl['damp'] = float(damp_tkl)
             meta_ic['max_proposed_change'] = float(np.max(np.abs(delta_vec_ic)))
-            meta_ic['gamma_adaptive'] = float(adaptive_gamma_ic)
+            meta_ic['damp'] = float(damp_ic)
         else:
             meta_tkl['max_proposed_change'] = float(max_proposed_change_tkl)
-            meta_tkl['gamma_adaptive'] = float(adaptive_gamma_tkl)
+            meta_tkl['damp'] = float(damp_tkl)
             meta_ic['max_proposed_change'] = float(max_proposed_change_ic)
-            meta_ic['gamma_adaptive'] = float(adaptive_gamma_ic)
+            meta_ic['damp'] = float(damp_ic)
         
         print(f"[NEWTON JOINT] Joint update applied (M_tkl={M_tkl}, M_ic={M_ic}, M_total={M_tkl+M_ic})")
         print(f"[NEWTON TKL] max_proposed_change: {meta_tkl['max_proposed_change']:.3f}")
-        print(f"[NEWTON TKL] adaptive_gamma: {meta_tkl['gamma_adaptive']:.3f} (base_gamma: {GAMMA:.3f})")
+        print(f"[NEWTON TKL] damp: {DAMP_TKL:.3e}")
         print(f"[SPECTRAL TKL] κ_raw: {meta_tkl['kappa_raw']:.2e}, λ_reg: {meta_tkl['lambda_reg']:.2e}, κ_after: {meta_tkl['kappa_after']:.2e}")
         print(f"[NEWTON IC] max_proposed_change: {meta_ic['max_proposed_change']:.3f}")
-        print(f"[NEWTON IC] adaptive_gamma: {meta_ic['gamma_adaptive']:.3f} (base_gamma: {GAMMA:.3f})")
+        print(f"[NEWTON IC] damp: {DAMP_IC:.3e}")
         print(f"[SPECTRAL IC] κ_raw: {meta_ic['kappa_raw']:.2e}, λ_reg: {meta_ic['lambda_reg']:.2e}, κ_after: {meta_ic['kappa_after']:.2e}")
     
     # ========== Apply updates to epsilon (TKL) ==========
@@ -2192,6 +2210,7 @@ def parse_args():
                     help="JSON list of (start, end, is_ring) chain tuples (end is exclusive)")
     pw.add_argument("--resolution", type=str, default=None, 
                     help="Observable resolution: None (default) for K×K type-averaged observables, '500kb' for (N/5)×(N/5) monomer-resolution observables")
+    pw.add_argument("--skip-frames", type=int, default=0)
 
     # reduce mode
     pr = sub.add_parser("reduce", help="Aggregate all per-rep artifacts and update both epsilon and lambda_IC")
@@ -2278,6 +2297,7 @@ def main():
                     manifest_path=manifest_path,
                     resolution=args.resolution,
                     chains=chains,
+                    skip_frames=args.skip_frames,
                 ),
                 targets,
                 chunksize=1,

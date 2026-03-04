@@ -49,6 +49,8 @@ class Simulation(object):
         self.gamma = kwargs.get("gamma", 0.05) / unit.picosecond
         self.timestep = kwargs.get("timestep", 70) * unit.femtoseconds
         self.platform = kwargs.get("platform", "CPU")
+        # OpenMiChroM uses 10 amu beads and a fixed Langevin integrator; set these to match.
+        self.particle_mass_amu = kwargs.get("particle_mass_amu", 1.0)
 
         self.system = mm.System()
         self.N = kwargs.get("N")
@@ -288,7 +290,7 @@ class Simulation(object):
     def create_system_object(self):
         self.system = mm.System()
         for _ in range(self.N):
-            self.system.addParticle(1.0)
+            self.system.addParticle(self.particle_mass_amu * unit.amu)
 
     def create_integrator_object(self):
         if self.integrator_type == 'Langevin':
@@ -311,7 +313,10 @@ class Simulation(object):
             print("platform_type can be either CUDA, OpenCL, or CPU")
 
     def create_context(self):
-        self.context = mm.Context(self.system, self.integrator, self.platform_object)
+        if getattr(self, "platform_properties", None):
+            self.context = mm.Context(self.system, self.integrator, self.platform_object, self.platform_properties)
+        else:
+            self.context = mm.Context(self.system, self.integrator, self.platform_object)
         self.context.setPositions(self.positions)
 
     def _dispatch_report(self, result):

@@ -1,0 +1,7 @@
+set -euo pipefail
+module purge || true
+eval "$(/home/pkv4601/.local/bin/micromamba shell hook --shell bash)"
+set +u; micromamba activate chunkchromatin; set -u
+export PYTHONPATH=/projects/p32733/ME:${PYTHONPATH:-}
+export JAX_PLATFORMS=cpu
+export JAX_PLATFORM_NAME=cpu
