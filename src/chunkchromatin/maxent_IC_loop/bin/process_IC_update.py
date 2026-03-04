@@ -24,7 +24,7 @@ MU_DEFAULT   = 4.22
 RC_DEFAULT   = 1.82
 RCUT_DEFAULT = 3.0  
 BETA_DEFAULT = 1.0
-GAMMA        = 0.33    # damping factor for Newton step
+DAMP        = 3e-7   # OpenMiChroM damp for IC update
 LAMBDA_REG_SCALE = 1e-10
 
 # ==========================
@@ -297,7 +297,7 @@ def _rep_dir_and_path(replicate_root, rep_idx):
     traj_path = os.path.join(rep_dir, "trajectory.traj")
     return rep_str, traj_path
 
-def _process_replicate_entry_IC(rep_idx, replicate_root, output_dir, exp_phi_IC_path, d_init, d_end, mu, rc, rcut, beta, cutoff, manifest_path, chains=None):
+def _process_replicate_entry_IC(rep_idx, replicate_root, output_dir, exp_phi_IC_path, d_init, d_end, mu, rc, rcut, beta, cutoff, manifest_path, chains=None, skip_frames=0):
     rep_str, traj_path = _rep_dir_and_path(replicate_root, rep_idx)
     out_npz   = os.path.join(output_dir, f"{rep_str}_IC_grad_hess.npz")
     out_touch = os.path.join(output_dir, f"{rep_str}.READY")
@@ -329,6 +329,8 @@ def _process_replicate_entry_IC(rep_idx, replicate_root, output_dir, exp_phi_IC_
         finally:
             if _IO_SEMA is not None: _IO_SEMA.release()
         read_s = time.time() - t_read0
+        if skip_frames:
+            positions = positions[skip_frames:]
 
         t_comp0 = time.time()
         out = process_one_replicate_IC(
@@ -443,11 +445,13 @@ def reduce_and_update_IC(output_dir, lambda_dir, beta=BETA_DEFAULT, iteration_id
 
     grads = []
     Hlist = []
+    phi_sims = []  # Collect phi_sim from each replicate
     dmax = None
     for fpath in files:
         z = np.load(fpath)
         grad_vec  = z["grad_vec"]
         Hess      = z["Hess"]
+        phi_sim   = z["phi_sim"]  # Load phi_sim directly
         this_dmax = int(z["dmax"])
         if dmax is None:
             dmax = this_dmax
@@ -455,6 +459,7 @@ def reduce_and_update_IC(output_dir, lambda_dir, beta=BETA_DEFAULT, iteration_id
             raise ValueError(f"Inconsistent dmax in {fpath}: {this_dmax} vs {dmax}")
         grads.append(grad_vec)
         Hlist.append(Hess)
+        phi_sims.append(phi_sim)  # Collect phi_sim
 
     grads = np.stack(grads, axis=0)       # (R, dmax)
     Hlist = np.stack(Hlist, axis=0)       # (R, dmax, dmax)
@@ -492,20 +497,14 @@ def reduce_and_update_IC(output_dir, lambda_dir, beta=BETA_DEFAULT, iteration_id
         print("[WARNING] Cholesky failed, falling back to standard solve")
         delta_vec = -np.linalg.solve(B_reg, g_mean)
     
-    # Parameter-dependent scaling
-    max_change_per_param = 0.5
+    # OpenMiChroM-style update: fixed damp scaling (no gamma/cap).
     max_proposed_change = np.max(np.abs(delta_vec))
-    if max_proposed_change > 0:
-        adaptive_gamma = min(max_change_per_param / max_proposed_change, GAMMA)
-    else:
-        adaptive_gamma = GAMMA
-    
-    delta_vec *= adaptive_gamma
+    delta_vec *= DAMP
     
     kappa_after = (lam_max + lambda_reg) / (abs(lam_min) + lambda_reg)
     
     print(f"[NEWTON] max_proposed_change: {max_proposed_change:.3f}")
-    print(f"[NEWTON] adaptive_gamma: {adaptive_gamma:.3f} (base_gamma: {GAMMA:.3f})")
+    print(f"[NEWTON] damp: {DAMP:.3e}")
     print(f"[SPECTRAL] κ_raw: {kappa_raw:.2e}, λ_reg: {lambda_reg:.2e}, κ_after: {kappa_after:.2e}")
 
     lambda_dir = Path(lambda_dir)
@@ -523,48 +522,30 @@ def reduce_and_update_IC(output_dir, lambda_dir, beta=BETA_DEFAULT, iteration_id
     lambda_next_path = os.path.join(output_dir, "lambda_IC_next.npy")
     np.save(lambda_next_path, lambda_new)
     
-    # Create phi_mean.npy from simulated observables
-    exp_targets_path = None
-    for potential_path in [
-        os.path.join(output_dir, "..", "..", "exp_targets", "phi_exp_IC.npy"),
-        os.path.join(output_dir, "phi_exp_IC.npy")
-    ]:
-        if os.path.exists(potential_path):
-            exp_targets_path = potential_path
-            break
-    
-    if exp_targets_path:
-        try:
-            phi_exp = np.load(exp_targets_path)
+    # Create phi_mean.npy from simulated observables (use saved phi_sim values)
+    try:
+        phi_mean = np.mean(phi_sims, axis=0)
+        phi_mean_path = os.path.join(output_dir, "phi_mean.npy")
+        np.save(phi_mean_path, phi_mean)
+        print(f"[REDUCE] Created phi_mean.npy from {len(files)} replicates")
+        
+        if len(phi_sims) > 1:
+            phi_sims_array = np.array(phi_sims)
+            phi_cov_diag = np.var(phi_sims_array, axis=0, ddof=1)
+            phi_cov_path = os.path.join(output_dir, "phi_cov_diag.npy")
+            np.save(phi_cov_path, phi_cov_diag)
+            print(f"[REDUCE] Created phi_cov_diag.npy")
             
-            phi_sims = []
-            for fpath in files:
-                z = np.load(fpath)
-                grad_vec = z["grad_vec"]
-                # phi_sim = phi_exp - (grad_vec / beta)
-                phi_sim = phi_exp - (grad_vec / beta)
-                phi_sims.append(phi_sim)
-            
-            phi_mean = np.mean(phi_sims, axis=0)
-            phi_mean_path = os.path.join(output_dir, "phi_mean.npy")
-            np.save(phi_mean_path, phi_mean)
-            print(f"[REDUCE] Created phi_mean.npy from {len(files)} replicates")
-            
-            if len(phi_sims) > 1:
-                phi_sims_array = np.array(phi_sims)
-                phi_cov_diag = np.var(phi_sims_array, axis=0, ddof=1)
-                phi_cov_path = os.path.join(output_dir, "phi_cov_diag.npy")
-                np.save(phi_cov_path, phi_cov_diag)
-                print(f"[REDUCE] Created phi_cov_diag.npy")
-                
-        except Exception as e:
-            print(f"[WARNING] Failed to create phi_mean.npy: {e}")
+    except Exception as e:
+        print(f"[WARNING] Failed to create phi_mean.npy: {e}")
+        import traceback
+        traceback.print_exc()
 
     meta = {
-        "gamma_base": GAMMA,
-        "gamma_adaptive": float(adaptive_gamma),
+        "damp": DAMP,
+        "damp": DAMP,
         "max_proposed_change": float(max_proposed_change),
-        "max_change_per_param": max_change_per_param,
+        "max_change_per_param": None,
         "lambda_reg": float(lambda_reg),
         "n_replicates": int(len(files)),
         "dmax": int(dmax),
@@ -585,7 +566,7 @@ def reduce_and_update_IC(output_dir, lambda_dir, beta=BETA_DEFAULT, iteration_id
     }
     with open(os.path.join(output_dir, "reduce_summary.json"), "w") as f:
         json.dump(meta, f, indent=2)
-    print(f"[REDUCE] gamma_base={GAMMA:.2f}, gamma_adaptive={adaptive_gamma:.3f}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
+    print(f"[REDUCE] damp={DAMP:.3e}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
     print(f"[REDUCE] lambda_old: {lambda_old_path.name}")
     print(f"[REDUCE] lambda_new: {save_path.name}")
     print(f"[REDUCE] lambda_next: lambda_IC_next.npy")
@@ -617,6 +598,7 @@ def parse_args():
     pw.add_argument("--rcut", type=float, default=RCUT_DEFAULT)
     pw.add_argument("--beta", type=float, default=BETA_DEFAULT)
     pw.add_argument("--cutoff", type=float, default=0.0)
+    pw.add_argument("--skip-frames", type=int, default=0)
     pw.add_argument("--chains", type=str, default=None,
                     help="JSON list of (start, end, is_ring) chain tuples (end is exclusive)")
 
@@ -702,6 +684,7 @@ def main():
                     mu=args.mu, rc=args.rc, rcut=args.rcut, beta=args.beta, cutoff=args.cutoff,
                     manifest_path=manifest_path,
                     chains=chains,
+                    skip_frames=args.skip_frames,
                 ),
                 targets,
                 chunksize=1,

@@ -24,7 +24,7 @@ MU_DEFAULT   = 4.22
 RC_DEFAULT   = 1.82
 RCUT_DEFAULT = 3.0  
 BETA_DEFAULT = 1.0
-GAMMA        = 0.33    # damping factor for Newton step
+DAMP        = 5e-7   # OpenMiChroM damp for type update
 LAMBDA_REG_SCALE = 1e-10
 
 # ==========================
@@ -475,7 +475,7 @@ def _rep_dir_and_path(replicate_root, rep_idx):
     traj_path = os.path.join(rep_dir, "trajectory.traj")
     return rep_str, traj_path
 
-def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types, exp_Tkl_path, mu, rc, rcut, beta, manifest_path, resolution=None):
+def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types, exp_Tkl_path, mu, rc, rcut, beta, manifest_path, resolution=None, skip_frames=0):
     rep_str, traj_path = _rep_dir_and_path(replicate_root, rep_idx)
     out_npz   = os.path.join(output_dir, f"{rep_str}_upper_grad_hess.npz")
     out_touch = os.path.join(output_dir, f"{rep_str}.READY")
@@ -507,6 +507,8 @@ def _process_replicate_entry(rep_idx, replicate_root, output_dir, monomer_types,
         finally:
             if _IO_SEMA is not None: _IO_SEMA.release()
         read_s = time.time() - t_read0
+        if skip_frames:
+            positions = positions[skip_frames:]
 
         t_comp0 = time.time()
         out = process_one_replicate(
@@ -695,21 +697,15 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
         print("[WARNING] Cholesky failed, falling back to standard solve")
         delta_vec = -np.linalg.solve(B_reg, g_mean)
     
-    # Parameter-dependent scaling: limit max change per parameter
-    max_change_per_param = 0.5
+    # OpenMiChroM-style update: fixed damp scaling (no gamma/cap).
     max_proposed_change = np.max(np.abs(delta_vec))
-    if max_proposed_change > 0:
-        adaptive_gamma = min(max_change_per_param / max_proposed_change, GAMMA)
-    else:
-        adaptive_gamma = GAMMA
-    
-    delta_vec *= adaptive_gamma
+    delta_vec *= DAMP
     
     # Calculate final condition number after regularization
     kappa_after = (lam_max + lambda_reg) / (abs(lam_min) + lambda_reg)
     
     print(f"[NEWTON] max_proposed_change: {max_proposed_change:.3f}")
-    print(f"[NEWTON] adaptive_gamma: {adaptive_gamma:.3f} (base_gamma: {GAMMA:.3f})")
+    print(f"[NEWTON] damp: {DAMP:.3e}")
     print(f"[SPECTRAL] κ_raw: {kappa_raw:.2e}, λ_reg: {lambda_reg:.2e}, κ_after: {kappa_after:.2e}")
     print(f"[SPECTRAL] eigenvalue range: [{lam_min:.2e}, {lam_max:.2e}]")
 
@@ -803,10 +799,9 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
         print(f"[WARNING] update_step.py may fail without phi_mean.npy")
 
     meta = {
-        "gamma_base": GAMMA,
-        "gamma_adaptive": float(adaptive_gamma),
+        "damp": float(DAMP),
         "max_proposed_change": float(max_proposed_change),
-        "max_change_per_param": max_change_per_param,
+        "max_change_per_param": None,
         "lambda_reg": float(lambda_reg),
         "n_replicates": int(len(files)),
         "K": int(K),
@@ -827,7 +822,7 @@ def reduce_and_update(output_dir, epsilon_dir, beta=BETA_DEFAULT, iteration_idx=
     }
     with open(os.path.join(output_dir, "reduce_summary.json"), "w") as f:
         json.dump(meta, f, indent=2)
-    print(f"[REDUCE] gamma_base={GAMMA:.2f}, gamma_adaptive={adaptive_gamma:.3f}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
+    print(f"[REDUCE] damp={DAMP:.3e}, lambda_reg={lambda_reg:.3e}, reps={len(files)}")
     print(f"[REDUCE] epsilon_old: {epsilon_old_path.name}")
     print(f"[REDUCE] epsilon_new: {save_path.name}")
     print(f"[REDUCE] epsilon_next: epsilon_next.npy")
@@ -861,6 +856,7 @@ def parse_args():
     pw.add_argument("--rc", type=float, default=RC_DEFAULT)
     pw.add_argument("--rcut", type=float, default=RCUT_DEFAULT)
     pw.add_argument("--beta", type=float, default=BETA_DEFAULT)
+    pw.add_argument("--skip-frames", type=int, default=0)
     pw.add_argument("--resolution", type=str, default=None, 
                     help="Observable resolution: None (default) for K×K type-averaged observables, '500kb' for (N/5)×(N/5) monomer-resolution observables")
 
@@ -961,6 +957,7 @@ def main():
                     mu=args.mu, rc=args.rc, rcut=args.rcut, beta=args.beta,
                     manifest_path=manifest_path,
                     resolution=args.resolution,
+                    skip_frames=args.skip_frames,
                 ),
                 targets,
                 chunksize=1,

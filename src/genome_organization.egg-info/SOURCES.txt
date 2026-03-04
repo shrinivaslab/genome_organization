@@ -46,6 +46,8 @@ src/chunkchromatin/maxent_tkl_IC_loop/bin/update_step_tkl_IC.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/update_step_tkl_IC_standalone.py
 src/chunkchromatin/maxent_tkl_IC_loop/bin/utils.py
 src/chunkchromatin/validation/compare_contact_maps.py
+src/chunkchromatin/validation/jax_compare_contact_maps.py
+src/chunkchromatin/validation/jax_traj_to_cmap.py
 src/genome_organization.egg-info/PKG-INFO
 src/genome_organization.egg-info/SOURCES.txt
 src/genome_organization.egg-info/dependency_links.txt
