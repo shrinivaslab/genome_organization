@@ -1,0 +1,91 @@
+{
+  "run": {
+    "name": "AA_fit",
+    "output_dir": "/projects/p32733/ME/diffTre/early_experiments/runs/AA_tkl_fit_rewrote"
+  },
+  "random_seed": 123,
+  "simulation": {
+    "n_particles": 500,
+    "n_replicates": 10,
+    "chains": [
+      [
+        0,
+        500,
+        false
+      ]
+    ],
+    "density": 0.1,
+    "initialization_method": "random_walk",
+    "temperature": 120.3,
+    "gamma": 0.1,
+    "timestep_fs": 10,
+    "platform": "GPU",
+    "eq_steps_phase1": 40000,
+    "eq_steps_phase2": 1000000,
+    "prod_steps": 1000000,
+    "save_every": 1000,
+    "save_energies": true,
+    "save_equilibration_frames": false
+  },
+  "monomer_types": {
+    "n_types": 1,
+    "types_path": "/projects/p32733/ME/diffTre/early_experiments/runs/AA_tkl/monomer_types.npy"
+  },
+  "loops": {
+    "looplist_path": "/projects/p32733/ME/diffTre/early_experiments/runs/AA_tkl/looplist.txt"
+  },
+  "distance_kernel": {
+    "mu": 3.22,
+    "rc": 1.78
+  },
+  "homopolymer_term_forces": {
+    "fene_bonds": {
+      "kFb": 30.0
+    },
+    "angles": {
+      "kA": 2.0
+    },
+    "repulsive_softcore": {
+      "eCut": 4.0,
+      "cutoffDistance": 3.0
+    },
+    "flat_bottom_harmonic": {
+      "kR": 0.005,
+      "nRad": 10.0
+    }
+  },
+  "learned_forces": {
+    "type_to_type": {
+      "rCutoff": 3.0,
+      "lim": 1.0
+    },
+    "ideal_chromosome": {
+      "d_init": 3,
+      "d_end": 300
+    }
+  },
+  "reference": {
+    "targets_dir": "/projects/p32733/ME/diffTre/early_experiments/runs/AA_tkl/exp_targets",
+    "reference_params_dir": "/projects/p32733/ME/diffTre/early_experiments/runs/AA_tkl/params"
+  },
+  "fit": {
+    "n_iters": 10,
+    "train_tkl": true,
+    "train_ic": false,
+    "train_loop": false,
+    "damp_tkl": 5e-9,
+    "damp_ic": 3e-7,
+    "eta": 0.01,
+    "energy_tolerance": 1e-3,
+    "max_reweight_steps": 100000,
+    "neff_threshold_frac": 0.7,
+    "max_resamples": 20,
+    "fit_tkl": true,
+    "fit_loop": false,
+    "fit_ic": false
+  },
+  "slurm_profile": "/projects/p32733/ME/diffTre/early_experiments/configs/ref_slurm.json",
+  "orchestration": {
+    "env_name": "chunkchromatin"
+  }
+}
